@@ -4,6 +4,7 @@ set -eu
 
 SCRIPT_NAME=$(basename "$0")
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+WORKSPACE_ROOT="$SCRIPT_DIR"
 DEFAULT_CPA_BASE_DIR="$SCRIPT_DIR/.cpa-docker"
 
 CPA_BASE_DIR=${CPA_BASE_DIR-}
@@ -65,6 +66,47 @@ escape_squotes() {
 
 trim_spaces() {
   printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+normalize_workspace_path() {
+  raw_path=$(trim_spaces "$1")
+  [ -n "$raw_path" ] || fail "路径不能为空"
+
+  while [ "${raw_path#./}" != "$raw_path" ]; do
+    raw_path=${raw_path#./}
+  done
+  if [ "$raw_path" = "." ]; then
+    raw_path=""
+  fi
+
+  case "/$raw_path/" in
+    */../*|*/./*)
+      fail "路径不允许包含目录跳转: $raw_path"
+      ;;
+  esac
+
+  case "$raw_path" in
+    /*)
+      normalized_path=$raw_path
+      ;;
+    *)
+      if [ -n "$raw_path" ]; then
+        normalized_path="$WORKSPACE_ROOT/$raw_path"
+      else
+        normalized_path="$WORKSPACE_ROOT"
+      fi
+      ;;
+  esac
+
+  normalized_path=$(printf '%s' "$normalized_path" | sed 's#//*#/#g; s#/$##')
+  case "$normalized_path" in
+    "$WORKSPACE_ROOT"|"$WORKSPACE_ROOT"/*)
+      printf '%s' "$normalized_path"
+      ;;
+    *)
+      fail "路径超出工作区: $normalized_path (workspace: $WORKSPACE_ROOT)"
+      ;;
+  esac
 }
 
 normalize_scalar() {
@@ -290,6 +332,7 @@ EOF
 
 set_cpa_defaults() {
   CPA_BASE_DIR=${CPA_BASE_DIR:-"$DEFAULT_CPA_BASE_DIR"}
+  CPA_BASE_DIR=$(normalize_workspace_path "$CPA_BASE_DIR")
   CPA_IMAGE=${CPA_IMAGE:-"eceasy/cli-proxy-api:latest"}
   CPA_CONTAINER_NAME=${CPA_CONTAINER_NAME:-"cpa"}
   CPA_BIND_HOST=${CPA_BIND_HOST:-"127.0.0.1"}
@@ -309,6 +352,7 @@ update_cpa_paths() {
   CPA_CONFIG_FILE="$CPA_DATA_DIR/config.yaml"
   CPA_ENV_FILE="$CPA_BASE_DIR/cpa-install.env"
   CPA_LOG_FILE=${CPA_LOG_FILE:-"$CPA_BASE_DIR/cpa-operation.log"}
+  CPA_LOG_FILE=$(normalize_workspace_path "$CPA_LOG_FILE")
 }
 
 load_cpa_env() {

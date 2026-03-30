@@ -2,4 +2,4 @@
 .cpa-docker/
 .tmp/
 dist/
-cpa-ops
+/cpa-ops
