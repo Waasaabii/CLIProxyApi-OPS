@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: 测试
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 下载依赖
+        run: go mod download
+
+      - name: 执行测试
+        run: go test ./...
+
+  package:
+    name: 打包-${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    needs:
+      - test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            binary_name: cpa-ops
+            artifact_name: cpa-ops-linux-amd64
+          - goos: linux
+            goarch: arm64
+            binary_name: cpa-ops
+            artifact_name: cpa-ops-linux-arm64
+          - goos: darwin
+            goarch: amd64
+            binary_name: cpa-ops
+            artifact_name: cpa-ops-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            binary_name: cpa-ops
+            artifact_name: cpa-ops-darwin-arm64
+          - goos: windows
+            goarch: amd64
+            binary_name: cpa-ops.exe
+            artifact_name: cpa-ops-windows-amd64
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 下载依赖
+        run: go mod download
+
+      - name: 编译二进制
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist/${{ matrix.artifact_name }}
+          go build -trimpath -ldflags="-s -w" -o dist/${{ matrix.artifact_name }}/${{ matrix.binary_name }} ./cmd/cpa-ops
+
+      - name: 上传制品
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}/
+          if-no-files-found: error
