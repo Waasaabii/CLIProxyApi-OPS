@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/Waasaabii/CLIProxyApi-OPS/internal/ops"
@@ -53,9 +55,12 @@ func runInteractiveMenu(ctx context.Context) error {
 				fmt.Printf("安装失败: %v\n", err)
 			}
 		case "2":
-			version, promptErr := promptVersion(reader)
+			version, promptErr := promptVersion(ctx, reader, manager)
 			if promptErr != nil {
 				return promptErr
+			}
+			if strings.TrimSpace(version) == "" {
+				break
 			}
 			if err = runInstall(ctx, []string{"--base-dir", baseDir, "--version", version}); err != nil {
 				fmt.Printf("安装失败: %v\n", err)
@@ -65,9 +70,12 @@ func runInteractiveMenu(ctx context.Context) error {
 				fmt.Printf("更新失败: %v\n", err)
 			}
 		case "4":
-			version, promptErr := promptVersion(reader)
+			version, promptErr := promptVersion(ctx, reader, manager)
 			if promptErr != nil {
 				return promptErr
+			}
+			if strings.TrimSpace(version) == "" {
+				break
 			}
 			if err = runUpdate(ctx, []string{"--base-dir", baseDir, "--version", version}); err != nil {
 				fmt.Printf("更新失败: %v\n", err)
@@ -204,7 +212,41 @@ func runInteractiveUninstall(ctx context.Context, reader *bufio.Reader, baseDir 
 	return runUninstall(ctx, args)
 }
 
-func promptVersion(reader *bufio.Reader) (string, error) {
+func promptVersion(ctx context.Context, reader *bufio.Reader, manager *ops.Manager) (string, error) {
+	releases, err := manager.ListReleases(ctx, 12)
+	if err == nil && len(releases) > 0 {
+		fmt.Println("可选 release:")
+		for index, release := range releases {
+			line := fmt.Sprintf("%d. %s", index+1, release.Version)
+			if strings.TrimSpace(release.Title) != "" && strings.TrimSpace(release.Title) != release.Version {
+				line += "  " + strings.TrimSpace(release.Title)
+			}
+			if strings.TrimSpace(release.PublishedAt) != "" {
+				line += "  " + strings.TrimSpace(release.PublishedAt)
+			}
+			fmt.Println(line)
+		}
+		fmt.Println("M. 手动输入版本")
+		fmt.Println("0. 返回上一级")
+
+		selection, promptErr := promptInput(reader, "请选择目标版本编号", "1")
+		if promptErr != nil {
+			return "", promptErr
+		}
+		version, resolveErr := resolveReleaseVersionSelection(selection, releases)
+		if resolveErr == nil {
+			return version, nil
+		}
+		if errors.Is(resolveErr, errVersionSelectionBack) {
+			return "", nil
+		}
+		if !errors.Is(resolveErr, errVersionSelectionManual) {
+			return "", resolveErr
+		}
+	} else if err != nil {
+		fmt.Printf("release 列表拉取失败，已回退为手动输入: %v\n", err)
+	}
+
 	value, err := promptInput(reader, "请输入目标版本，例如 v6.9.6", "")
 	if err != nil {
 		return "", err
@@ -212,6 +254,35 @@ func promptVersion(reader *bufio.Reader) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return "", errors.New("目标版本不能为空")
+	}
+	return value, nil
+}
+
+var (
+	errVersionSelectionManual = errors.New("manual version input")
+	errVersionSelectionBack   = errors.New("back to menu")
+)
+
+func resolveReleaseVersionSelection(raw string, releases []ops.ReleaseSummary) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", errors.New("目标版本不能为空")
+	}
+	switch strings.ToLower(value) {
+	case "0", "q", "quit", "back":
+		return "", errVersionSelectionBack
+	case "m", "manual":
+		return "", errVersionSelectionManual
+	}
+	if index, err := strconv.Atoi(value); err == nil {
+		if index < 1 || index > len(releases) {
+			return "", fmt.Errorf("无效版本编号: %d", index)
+		}
+		version := strings.TrimSpace(releases[index-1].Version)
+		if version == "" {
+			return "", fmt.Errorf("编号 %d 对应的版本为空", index)
+		}
+		return version, nil
 	}
 	return value, nil
 }
@@ -224,6 +295,13 @@ func promptInput(reader *bufio.Reader, label, defaultValue string) (string, erro
 	}
 	text, err := reader.ReadString('\n')
 	if err != nil {
+		if errors.Is(err, io.EOF) {
+			text = strings.TrimSpace(text)
+			if text == "" {
+				return defaultValue, nil
+			}
+			return text, nil
+		}
 		return "", err
 	}
 	text = strings.TrimSpace(text)

@@ -582,6 +582,39 @@ func (m *Manager) LatestRelease(ctx context.Context) (ReleaseInfo, error) {
 	return info, nil
 }
 
+func (m *Manager) ListReleases(ctx context.Context, limit int) ([]ReleaseSummary, error) {
+	releases, err := m.releaseProvider.List(ctx, "")
+	if err != nil {
+		if state, stateErr := m.loadState(); stateErr == nil {
+			fallback := strings.TrimSpace(state.Release.LatestVersion)
+			if fallback != "" {
+				return []ReleaseSummary{
+					{
+						Version:     fallback,
+						Title:       strings.TrimSpace(state.Release.ReleaseTitle),
+						URL:         strings.TrimSpace(state.Release.ReleaseURL),
+						PublishedAt: strings.TrimSpace(state.Release.PublishedAt),
+					},
+				}, nil
+			}
+		}
+		return nil, err
+	}
+	if limit > 0 && len(releases) > limit {
+		releases = releases[:limit]
+	}
+	items := make([]ReleaseSummary, 0, len(releases))
+	for _, release := range releases {
+		items = append(items, ReleaseSummary{
+			Version:     strings.TrimSpace(release.Version),
+			Title:       strings.TrimSpace(release.Title),
+			URL:         strings.TrimSpace(release.URL),
+			PublishedAt: strings.TrimSpace(release.PublishedAt),
+		})
+	}
+	return items, nil
+}
+
 func (m *Manager) CheckUpdate(ctx context.Context, authToken string) (ReleaseInfo, error) {
 	current, commit, buildDate := m.probeCurrentVersion(ctx, authToken)
 	releases, err := m.releaseProvider.List(ctx, current)

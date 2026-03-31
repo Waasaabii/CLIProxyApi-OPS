@@ -109,6 +109,13 @@ type ReleaseInfo struct {
 	PublishedAt               string   `json:"publishedAt,omitempty"`
 }
 
+type ReleaseSummary struct {
+	Version     string `json:"version"`
+	Title       string `json:"title,omitempty"`
+	URL         string `json:"url,omitempty"`
+	PublishedAt string `json:"publishedAt,omitempty"`
+}
+
 type Info struct {
 	Config     DeployConfig `json:"config"`
 	Status     Status       `json:"status"`
