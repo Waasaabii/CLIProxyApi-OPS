@@ -391,6 +391,7 @@ func buildManager(args []string) (*ops.Manager, string, error) {
 			Debug:                  parseOptionalBool(*debug),
 			UsageStatisticsEnabled: parseOptionalBool(*usageStats),
 			RequestRetry:           *requestRetry,
+			RequestRetryExplicit:   *requestRetry >= 0,
 		},
 	})
 	if err != nil {

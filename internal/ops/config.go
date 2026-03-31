@@ -243,7 +243,7 @@ func applyOverrides(cfg DeployConfig, overrides OverrideConfig) DeployConfig {
 	if overrides.UsageStatisticsEnabled != nil {
 		cfg.UsageStatisticsEnabled = *overrides.UsageStatisticsEnabled
 	}
-	if overrides.RequestRetry >= 0 {
+	if overrides.RequestRetryExplicit {
 		cfg.RequestRetry = overrides.RequestRetry
 	}
 	return cfg

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 type DeployExecutor interface {
@@ -23,23 +24,53 @@ type composeDeployExecutor struct {
 	manager *Manager
 }
 
+var composePullRetryDelay = 2 * time.Second
+
 func (composeDeployExecutorFactory) Create(manager *Manager, options Options) DeployExecutor {
 	return &composeDeployExecutor{manager: manager}
 }
 
 func (e *composeDeployExecutor) Pull(ctx context.Context, cfg DeployConfig, logger Logger) error {
-	if err := e.runCompose(ctx, cfg, logger, "pull"); err != nil {
-		if !e.HasLocalImage(ctx, cfg, strings.TrimSpace(cfg.Image)) {
-			return err
+	attempts := cfg.RequestRetry + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := e.runCompose(ctx, cfg, logger, "pull"); err == nil {
+			return nil
+		} else {
+			lastErr = err
 		}
-		message := fmt.Sprintf("镜像拉取失败，已回退为使用本地已有镜像继续部署: %s", strings.TrimSpace(cfg.Image))
+
+		if e.HasLocalImage(ctx, cfg, strings.TrimSpace(cfg.Image)) {
+			message := fmt.Sprintf("镜像拉取失败，已回退为使用本地已有镜像继续部署: %s", strings.TrimSpace(cfg.Image))
+			_ = e.manager.writeOperationLog(cfg, "%s", message)
+			if logger != nil {
+				logger.Printf("%s", message)
+			}
+			return nil
+		}
+
+		if attempt >= attempts {
+			break
+		}
+
+		message := fmt.Sprintf("镜像拉取失败，第 %d/%d 次重试前等待: %v", attempt, attempts, lastErr)
 		_ = e.manager.writeOperationLog(cfg, "%s", message)
 		if logger != nil {
 			logger.Printf("%s", message)
 		}
-		return nil
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(composePullRetryDelay):
+		}
 	}
-	return nil
+
+	return fmt.Errorf("镜像拉取失败，已重试 %d 次仍未成功: %w", attempts, lastErr)
 }
 
 func (e *composeDeployExecutor) Up(ctx context.Context, cfg DeployConfig, logger Logger) error {

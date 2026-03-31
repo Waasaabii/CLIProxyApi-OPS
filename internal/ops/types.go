@@ -37,6 +37,7 @@ type OverrideConfig struct {
 	Debug                  *bool
 	UsageStatisticsEnabled *bool
 	RequestRetry           int
+	RequestRetryExplicit   bool
 }
 
 type DeployConfig struct {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -299,6 +300,58 @@ func TestUpdateUsesLocalImageWhenPullFails(t *testing.T) {
 	}
 }
 
+func TestInstallRetriesPullUntilSuccess(t *testing.T) {
+	latestBackup := githubLatestReleaseURL
+	releaseListBackup := githubReleaseListURL
+	retryDelayBackup := composePullRetryDelay
+	defer func() {
+		githubLatestReleaseURL = latestBackup
+		githubReleaseListURL = releaseListBackup
+		composePullRetryDelay = retryDelayBackup
+	}()
+
+	composePullRetryDelay = time.Millisecond
+
+	baseDir := t.TempDir()
+	pullCountFile := filepath.Join(baseDir, "pull-count.txt")
+	installFakeDockerWithTransientPullFailures(t, baseDir, pullCountFile, 2)
+
+	server := newReleaseAndManagementServer(t)
+	defer server.Close()
+	githubLatestReleaseURL = server.URL + "/releases/latest"
+	githubReleaseListURL = server.URL + "/releases"
+
+	manager, err := NewManager(Options{
+		BaseDir:         baseDir,
+		WorkspaceRoot:   baseDir,
+		UpstreamBaseURL: server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	currentCfg, err := manager.CurrentConfig()
+	if err != nil {
+		t.Fatalf("CurrentConfig failed: %v", err)
+	}
+	if currentCfg.RequestRetry != defaultRequestRetry {
+		t.Fatalf("request retry = %d, want %d", currentCfg.RequestRetry, defaultRequestRetry)
+	}
+
+	if err = manager.Install(context.Background(), nil); err != nil {
+		t.Fatalf("Install failed: %v", err)
+	}
+
+	countRaw, err := os.ReadFile(pullCountFile)
+	if err != nil {
+		t.Fatalf("read pull count failed: %v", err)
+	}
+	if strings.TrimSpace(string(countRaw)) != "3" {
+		logContent, _ := os.ReadFile(filepath.Join(baseDir, "cpa-operation.log"))
+		t.Fatalf("unexpected pull count: %q\nlog:\n%s", string(countRaw), string(logContent))
+	}
+}
+
 func installFakeDocker(t *testing.T, baseDir, lastCompose string) {
 	t.Helper()
 
@@ -327,6 +380,9 @@ if [ "$#" -ge 1 ] && [ "$1" = "compose" ]; then
     cp "$compose_file" "$FAKE_DOCKER_LAST_COMPOSE"
   fi
   exit 0
+fi
+if [ "$#" -ge 2 ] && [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+  exit 1
 fi
 exit 0
 `
@@ -392,6 +448,54 @@ exit 0
 
 	t.Setenv("FAKE_DOCKER_LAST_COMPOSE", lastCompose)
 	t.Setenv("FAKE_DOCKER_LOCAL_IMAGE", localImage)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func installFakeDockerWithTransientPullFailures(t *testing.T, baseDir, pullCountFile string, failCount int) {
+	t.Helper()
+
+	binDir := filepath.Join(baseDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+
+	script := `#!/bin/sh
+set -eu
+if [ "$#" -ge 2 ] && [ "$1" = "compose" ] && [ "$2" = "version" ]; then
+  exit 0
+fi
+if [ "$#" -ge 1 ] && [ "$1" = "compose" ]; then
+  last_arg=""
+  for arg in "$@"; do
+    last_arg="$arg"
+  done
+  if [ "$last_arg" = "pull" ]; then
+    count=0
+    if [ -f "$FAKE_DOCKER_PULL_COUNT_FILE" ]; then
+      count=$(cat "$FAKE_DOCKER_PULL_COUNT_FILE")
+    fi
+    count=$((count + 1))
+    printf '%s' "$count" >"$FAKE_DOCKER_PULL_COUNT_FILE"
+    if [ "$count" -le "$FAKE_DOCKER_PULL_FAIL_COUNT" ]; then
+      echo "temporary pull failure" >&2
+      exit 1
+    fi
+    exit 0
+  fi
+  exit 0
+fi
+if [ "$#" -ge 2 ] && [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+  exit 1
+fi
+exit 0
+`
+	dockerPath := filepath.Join(binDir, "docker")
+	if err := os.WriteFile(dockerPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile docker failed: %v", err)
+	}
+
+	t.Setenv("FAKE_DOCKER_PULL_COUNT_FILE", pullCountFile)
+	t.Setenv("FAKE_DOCKER_PULL_FAIL_COUNT", fmt.Sprintf("%d", failCount))
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 

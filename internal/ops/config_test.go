@@ -92,6 +92,19 @@ api-keys:
 	}
 }
 
+func TestApplyOverridesKeepsDefaultRequestRetryWhenNotExplicit(t *testing.T) {
+	t.Parallel()
+
+	cfg := defaultDeployConfig(t.TempDir())
+	overrides := OverrideConfig{RequestRetry: 0}
+
+	updated := applyOverrides(cfg, overrides)
+
+	if updated.RequestRetry != defaultRequestRetry {
+		t.Fatalf("request retry = %d, want %d", updated.RequestRetry, defaultRequestRetry)
+	}
+}
+
 func TestUninstallDryRunKeepsDataAndBackupsByDefault(t *testing.T) {
 	t.Parallel()
 
