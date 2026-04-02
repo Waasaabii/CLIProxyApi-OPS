@@ -44,29 +44,24 @@ jobs:
         include:
           - goos: linux
             goarch: amd64
-            binary_name: cpa-ops
+            binary_name: cpa-ops-linux-amd64
             artifact_name: cpa-ops-linux-amd64
-            archive_name: cpa-ops-linux-amd64.tar.gz
           - goos: linux
             goarch: arm64
-            binary_name: cpa-ops
+            binary_name: cpa-ops-linux-arm64
             artifact_name: cpa-ops-linux-arm64
-            archive_name: cpa-ops-linux-arm64.tar.gz
           - goos: darwin
             goarch: amd64
-            binary_name: cpa-ops
+            binary_name: cpa-ops-darwin-amd64
             artifact_name: cpa-ops-darwin-amd64
-            archive_name: cpa-ops-darwin-amd64.tar.gz
           - goos: darwin
             goarch: arm64
-            binary_name: cpa-ops
+            binary_name: cpa-ops-darwin-arm64
             artifact_name: cpa-ops-darwin-arm64
-            archive_name: cpa-ops-darwin-arm64.tar.gz
           - goos: windows
             goarch: amd64
-            binary_name: cpa-ops.exe
+            binary_name: cpa-ops-windows-amd64.exe
             artifact_name: cpa-ops-windows-amd64
-            archive_name: cpa-ops-windows-amd64.zip
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -89,28 +84,16 @@ jobs:
           mkdir -p dist/${{ matrix.artifact_name }}
           go build -trimpath -ldflags="-s -w" -o dist/${{ matrix.artifact_name }}/${{ matrix.binary_name }} ./cmd/cpa-ops
 
-      - name: 归档发布包
+      - name: 整理发布文件
         run: |
           mkdir -p dist/release
-          case "${{ matrix.archive_name }}" in
-            *.tar.gz)
-              tar -C dist/${{ matrix.artifact_name }} -czf dist/release/${{ matrix.archive_name }} .
-              ;;
-            *.zip)
-              cd dist/${{ matrix.artifact_name }}
-              zip -q ../release/${{ matrix.archive_name }} ${{ matrix.binary_name }}
-              ;;
-            *)
-              echo "unsupported archive: ${{ matrix.archive_name }}" >&2
-              exit 1
-              ;;
-          esac
+          cp dist/${{ matrix.artifact_name }}/${{ matrix.binary_name }} dist/release/${{ matrix.binary_name }}
 
       - name: 上传制品
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: dist/release/${{ matrix.archive_name }}
+          path: dist/release/${{ matrix.binary_name }}
           if-no-files-found: error
 
   release:

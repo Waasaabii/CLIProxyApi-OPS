@@ -100,16 +100,14 @@ resolve_latest_version() {
 }
 
 build_asset_names() {
-  archive_base="cpa-ops-$platform_os-$platform_arch"
   binary_name="cpa-ops"
-  archive_ext="tar.gz"
+  asset_name="cpa-ops-$platform_os-$platform_arch"
   case "$platform_os" in
     windows)
       binary_name="cpa-ops.exe"
-      archive_ext="zip"
+      asset_name="$asset_name.exe"
       ;;
   esac
-  archive_name="$archive_base.$archive_ext"
 }
 
 print_usage() {
@@ -119,7 +117,7 @@ print_usage() {
 
 说明:
   - 默认下载最新 release
-  - 默认解压到当前工作区的 ./.tmp/releases/<version>/
+  - 默认下载到当前工作区的 ./.tmp/releases/<version>/cpa-ops
   - 如果当前是交互终端且没有额外参数，下载完成后直接进入 cpa-ops 交互菜单
 EOF
 }
@@ -159,8 +157,6 @@ while [ $# -gt 0 ]; do
 done
 
 need_cmd curl
-need_cmd tar
-need_cmd unzip
 
 detect_platform
 build_asset_names
@@ -171,32 +167,19 @@ fi
 
 INSTALL_ROOT=$(normalize_workspace_path "$INSTALL_ROOT")
 version_dir=$(normalize_workspace_path "$INSTALL_ROOT/$version")
-archive_path="$version_dir/$archive_name"
 binary_path="$version_dir/$binary_name"
 
 mkdir -p "$version_dir"
 
 if [ ! -f "$binary_path" ]; then
   if [ "$version" = "latest" ]; then
-    download_url="$RELEASE_BASE_URL/latest/download/$archive_name"
+    download_url="$RELEASE_BASE_URL/latest/download/$asset_name"
   else
-    download_url="$RELEASE_BASE_URL/download/$version/$archive_name"
+    download_url="$RELEASE_BASE_URL/download/$version/$asset_name"
   fi
 
   printf '下载 %s\n' "$download_url"
-  curl -fL "$download_url" -o "$archive_path" || fail "下载 release 资产失败"
-
-  case "$archive_name" in
-    *.tar.gz)
-      tar -xzf "$archive_path" -C "$version_dir" || fail "解压 tar.gz 失败"
-      ;;
-    *.zip)
-      unzip -o "$archive_path" -d "$version_dir" >/dev/null || fail "解压 zip 失败"
-      ;;
-    *)
-      fail "未知归档格式: $archive_name"
-      ;;
-  esac
+  curl -fL "$download_url" -o "$binary_path" || fail "下载 release 二进制失败"
 fi
 
 [ -f "$binary_path" ] || fail "未找到二进制: $binary_path"

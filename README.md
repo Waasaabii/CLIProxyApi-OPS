@@ -35,7 +35,7 @@ CLI Proxy API 的独立运维工具。
 
 ## 直接从 Release 安装
 
-如果你不想自己 `go build`，可以直接下载 GitHub Release 二进制并立即进入交互终端。
+如果你不想自己 `go build`，推荐直接用下面这条命令。
 
 在目标工作区目录内执行：
 
@@ -43,11 +43,13 @@ CLI Proxy API 的独立运维工具。
 curl -fsSL https://raw.githubusercontent.com/Waasaabii/CLIProxyApi-OPS/main/install-release.sh | sh
 ```
 
+它会自动识别系统架构，下载对应平台的最新单文件二进制，并直接进入交互终端。
+
 默认行为：
 
 - 自动识别当前平台
 - 下载最新 release
-- 解压到当前工作区的 `./.tmp/releases/<version>/`
+- 下载到当前工作区的 `./.tmp/releases/<version>/cpa-ops`
 - 直接启动 `cpa-ops` 交互终端
 
 安装指定版本：
@@ -60,6 +62,47 @@ curl -fsSL https://raw.githubusercontent.com/Waasaabii/CLIProxyApi-OPS/main/inst
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Waasaabii/CLIProxyApi-OPS/main/install-release.sh | sh -s -- --no-run
+```
+
+如果你更喜欢像宝塔那样“直接下载一个可执行文件再运行”，可以直接使用 GitHub Release 资产。
+
+Linux amd64：
+
+```sh
+curl -fL https://github.com/Waasaabii/CLIProxyApi-OPS/releases/latest/download/cpa-ops-linux-amd64 -o ./cpa-ops
+chmod +x ./cpa-ops
+./cpa-ops
+```
+
+Linux arm64：
+
+```sh
+curl -fL https://github.com/Waasaabii/CLIProxyApi-OPS/releases/latest/download/cpa-ops-linux-arm64 -o ./cpa-ops
+chmod +x ./cpa-ops
+./cpa-ops
+```
+
+macOS amd64：
+
+```sh
+curl -fL https://github.com/Waasaabii/CLIProxyApi-OPS/releases/latest/download/cpa-ops-darwin-amd64 -o ./cpa-ops
+chmod +x ./cpa-ops
+./cpa-ops
+```
+
+macOS arm64：
+
+```sh
+curl -fL https://github.com/Waasaabii/CLIProxyApi-OPS/releases/latest/download/cpa-ops-darwin-arm64 -o ./cpa-ops
+chmod +x ./cpa-ops
+./cpa-ops
+```
+
+Windows PowerShell：
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/Waasaabii/CLIProxyApi-OPS/releases/latest/download/cpa-ops-windows-amd64.exe" -OutFile ".\cpa-ops.exe"
+.\cpa-ops.exe
 ```
 
 ## 本地构建
@@ -110,11 +153,11 @@ http://127.0.0.1:18318/management.html#/system
 
 ## GitHub Release 资产命名
 
-- `cpa-ops-linux-amd64.tar.gz`
-- `cpa-ops-linux-arm64.tar.gz`
-- `cpa-ops-darwin-amd64.tar.gz`
-- `cpa-ops-darwin-arm64.tar.gz`
-- `cpa-ops-windows-amd64.zip`
+- `cpa-ops-linux-amd64`
+- `cpa-ops-linux-arm64`
+- `cpa-ops-darwin-amd64`
+- `cpa-ops-darwin-arm64`
+- `cpa-ops-windows-amd64.exe`
 
 ## 开发验证
 
