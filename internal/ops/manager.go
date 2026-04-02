@@ -90,13 +90,17 @@ func (m *Manager) Repair(ctx context.Context, logger Logger) error {
 		if err != nil {
 			return err
 		}
+		lastBackup := ""
+		if state, stateErr := m.loadState(); stateErr == nil {
+			lastBackup = strings.TrimSpace(state.LastBackup)
+		}
 		if err = m.persistDeploymentFiles(cfg); err != nil {
 			return err
 		}
 		if err = m.deployExecutor.Up(ctx, cfg, logger); err != nil {
 			return err
 		}
-		return m.persistRuntimeState(ctx, cfg, cfg.ManagementSecret, "")
+		return m.persistRuntimeState(ctx, cfg, cfg.ManagementSecret, lastBackup)
 	})
 }
 
@@ -412,6 +416,7 @@ func (m *Manager) probeCurrentVersion(ctx context.Context, authToken string) (st
 		return "", "", ""
 	}
 	token := m.resolveManagementToken(cfg, authToken)
+	stopOnAuthFailure := token == "" && cfg.ManagementSecretHashed
 	endpoint := strings.TrimRight(m.upstreamBaseURL(cfg), "/") + "/v0/management/config"
 	client := &http.Client{Timeout: 5 * time.Second}
 	attempts := cfg.RequestRetry + 1
@@ -435,6 +440,9 @@ func (m *Manager) probeCurrentVersion(ctx context.Context, authToken string) (st
 				buildDate := strings.TrimSpace(resp.Header.Get("X-CPA-BUILD-DATE"))
 				if version != "" {
 					return version, commit, buildDate
+				}
+				if stopOnAuthFailure && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+					break
 				}
 			}
 		}
@@ -730,17 +738,23 @@ func writeEnvFileAtomic(cfg DeployConfig) error {
 }
 
 func writeComposeFileAtomic(cfg DeployConfig) error {
+	volumeSpec := "./data"
+	if filepath.Clean(cfg.DataDir) != filepath.Join(cfg.BaseDir, "data") {
+		volumeSpec = cfg.DataDir
+	}
 	content := fmt.Sprintf(`services:
   cpa:
     image: %s
     container_name: %s
     command: ["/CLIProxyAPI/CLIProxyAPI", "--config", "/data/config.yaml"]
     restart: unless-stopped
+    environment:
+      DEPLOY: cloud
     ports:
       - "%s:%d:%d"
     volumes:
-      - ./data:/data
-`, cfg.Image, cfg.ContainerName, cfg.BindHost, cfg.HostPort, cfg.ContainerPort)
+      - "%s:/data"
+`, cfg.Image, cfg.ContainerName, cfg.BindHost, cfg.HostPort, cfg.ContainerPort, volumeSpec)
 	return writeFileAtomic(cfg.ComposeFile, []byte(content), 0o644)
 }
 

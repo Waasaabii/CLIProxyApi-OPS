@@ -352,6 +352,198 @@ func TestInstallRetriesPullUntilSuccess(t *testing.T) {
 	}
 }
 
+func TestRepairAdoptsLegacyDeploymentWithoutEnvFile(t *testing.T) {
+	latestBackup := githubLatestReleaseURL
+	releaseListBackup := githubReleaseListURL
+	defer func() {
+		githubLatestReleaseURL = latestBackup
+		githubReleaseListURL = releaseListBackup
+	}()
+
+	workspaceRoot := t.TempDir()
+	baseDir := filepath.Join(workspaceRoot, "legacy", ".cpa-docker")
+	lastCompose := filepath.Join(workspaceRoot, "last-compose.yml")
+	installFakeDocker(t, workspaceRoot, lastCompose)
+
+	server := newReleaseAndManagementServer(t)
+	defer server.Close()
+	githubLatestReleaseURL = server.URL + "/releases/latest"
+	githubReleaseListURL = server.URL + "/releases"
+
+	cfg := defaultDeployConfig(baseDir)
+	cfg.Image = "eceasy/cli-proxy-api:v6.9.3"
+	cfg.ContainerName = "cpa-legacy-adopt"
+	cfg.BindHost = "0.0.0.0"
+	cfg.HostPort = 29317
+	cfg.APIKey = "legacy-api-key"
+	cfg.ManagementSecret = "legacy-management-secret"
+
+	if err := os.MkdirAll(filepath.Dir(cfg.ConfigFile), 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	if err := writeInitialConfigFile(cfg); err != nil {
+		t.Fatalf("writeInitialConfigFile failed: %v", err)
+	}
+	if err := writeComposeFileAtomic(cfg); err != nil {
+		t.Fatalf("writeComposeFileAtomic failed: %v", err)
+	}
+	if _, err := os.Stat(cfg.EnvFile); !os.IsNotExist(err) {
+		t.Fatalf("expected env file to be absent before repair, err=%v", err)
+	}
+
+	manager, err := NewManager(Options{
+		WorkspaceRoot:   workspaceRoot,
+		UpstreamBaseURL: server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	if err = manager.Repair(context.Background(), nil); err != nil {
+		t.Fatalf("Repair failed: %v", err)
+	}
+
+	envData, err := os.ReadFile(cfg.EnvFile)
+	if err != nil {
+		t.Fatalf("ReadFile env failed: %v", err)
+	}
+	if !strings.Contains(string(envData), "CPA_CONTAINER_NAME='cpa-legacy-adopt'") {
+		t.Fatalf("env file did not adopt legacy deployment:\n%s", string(envData))
+	}
+
+	composeData, err := os.ReadFile(cfg.ComposeFile)
+	if err != nil {
+		t.Fatalf("ReadFile compose failed: %v", err)
+	}
+	if !strings.Contains(string(composeData), "DEPLOY: cloud") {
+		t.Fatalf("compose file missing legacy DEPLOY environment:\n%s", string(composeData))
+	}
+
+	lastComposeData, err := os.ReadFile(lastCompose)
+	if err != nil {
+		t.Fatalf("ReadFile last compose failed: %v", err)
+	}
+	if !strings.Contains(string(lastComposeData), "container_name: cpa-legacy-adopt") {
+		t.Fatalf("docker compose did not use adopted deployment config:\n%s", string(lastComposeData))
+	}
+}
+
+func TestRepairPreservesCustomLegacyDataDir(t *testing.T) {
+	latestBackup := githubLatestReleaseURL
+	releaseListBackup := githubReleaseListURL
+	defer func() {
+		githubLatestReleaseURL = latestBackup
+		githubReleaseListURL = releaseListBackup
+	}()
+
+	workspaceRoot := t.TempDir()
+	baseDir := filepath.Join(workspaceRoot, "legacy-custom", ".cpa-docker")
+	customDataDir := filepath.Join(workspaceRoot, "legacy-custom", "persisted-data")
+	lastCompose := filepath.Join(workspaceRoot, "last-compose-custom.yml")
+	installFakeDocker(t, workspaceRoot, lastCompose)
+
+	server := newReleaseAndManagementServer(t)
+	defer server.Close()
+	githubLatestReleaseURL = server.URL + "/releases/latest"
+	githubReleaseListURL = server.URL + "/releases"
+
+	cfg := defaultDeployConfig(baseDir)
+	cfg.DataDir = customDataDir
+	cfg = finalizeDeployConfig(cfg, "")
+	cfg.Image = "eceasy/cli-proxy-api:v6.9.3"
+	cfg.ContainerName = "cpa-custom-data"
+	cfg.APIKey = "legacy-api-key"
+	cfg.ManagementSecret = "legacy-management-secret"
+
+	if err := os.MkdirAll(filepath.Join(cfg.DataDir, "auths"), 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	if err := writeInitialConfigFile(cfg); err != nil {
+		t.Fatalf("writeInitialConfigFile failed: %v", err)
+	}
+	if err := writeComposeFileAtomic(cfg); err != nil {
+		t.Fatalf("writeComposeFileAtomic failed: %v", err)
+	}
+
+	manager, err := NewManager(Options{
+		WorkspaceRoot:   workspaceRoot,
+		UpstreamBaseURL: server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	if err = manager.Repair(context.Background(), nil); err != nil {
+		t.Fatalf("Repair failed: %v", err)
+	}
+
+	currentCfg, err := manager.CurrentConfig()
+	if err != nil {
+		t.Fatalf("CurrentConfig failed: %v", err)
+	}
+	if currentCfg.DataDir != customDataDir {
+		t.Fatalf("data dir = %q, want %q", currentCfg.DataDir, customDataDir)
+	}
+
+	composeData, err := os.ReadFile(cfg.ComposeFile)
+	if err != nil {
+		t.Fatalf("ReadFile compose failed: %v", err)
+	}
+	if !strings.Contains(string(composeData), customDataDir+":/data") {
+		t.Fatalf("compose file did not preserve custom data dir:\n%s", string(composeData))
+	}
+}
+
+func TestRepairPreservesLastBackupMarker(t *testing.T) {
+	latestBackup := githubLatestReleaseURL
+	releaseListBackup := githubReleaseListURL
+	defer func() {
+		githubLatestReleaseURL = latestBackup
+		githubReleaseListURL = releaseListBackup
+	}()
+
+	baseDir := t.TempDir()
+	lastCompose := filepath.Join(baseDir, "last-compose.yml")
+	installFakeDocker(t, baseDir, lastCompose)
+
+	server := newReleaseAndManagementServer(t)
+	defer server.Close()
+	githubLatestReleaseURL = server.URL + "/releases/latest"
+	githubReleaseListURL = server.URL + "/releases"
+
+	manager, err := NewManager(Options{
+		BaseDir:         baseDir,
+		WorkspaceRoot:   baseDir,
+		UpstreamBaseURL: server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	cfg := defaultDeployConfig(baseDir)
+	cfg.Image = "eceasy/cli-proxy-api:v6.9.1"
+	cfg.APIKey = "test-api-key"
+	cfg.ManagementSecret = "test-management-secret"
+	if err = seedExistingDeployment(cfg); err != nil {
+		t.Fatalf("seedExistingDeployment failed: %v", err)
+	}
+	if err = manager.saveState(cfg, ReleaseInfo{CurrentVersion: "v6.9.1"}, "keep-backup.tar.gz"); err != nil {
+		t.Fatalf("saveState failed: %v", err)
+	}
+
+	if err = manager.Repair(context.Background(), nil); err != nil {
+		t.Fatalf("Repair failed: %v", err)
+	}
+
+	state, err := manager.loadState()
+	if err != nil {
+		t.Fatalf("loadState failed: %v", err)
+	}
+	if state.LastBackup != "keep-backup.tar.gz" {
+		t.Fatalf("last backup = %q, want %q", state.LastBackup, "keep-backup.tar.gz")
+	}
+}
+
 func installFakeDocker(t *testing.T, baseDir, lastCompose string) {
 	t.Helper()
 

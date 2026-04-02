@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -38,7 +39,10 @@ func newManagerWithDependencies(options Options, dependencies ManagerDependencie
 	}
 	baseDir := strings.TrimSpace(options.BaseDir)
 	if baseDir == "" {
-		baseDir = filepath.Join(workspaceRoot, ".cpa-docker")
+		baseDir, err = discoverManagedBaseDir(workspaceRoot)
+		if err != nil {
+			return nil, err
+		}
 	}
 	baseDir, err = normalizePathWithinWorkspace(workspaceRoot, baseDir)
 	if err != nil {
@@ -84,12 +88,18 @@ func (m *Manager) loadConfig() (DeployConfig, error) {
 	}
 	if envCfg, err := loadEnvFile(cfg.EnvFile, cfg); err == nil {
 		cfg = envCfg
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return DeployConfig{}, err
 	}
 	if composeCfg, err := loadComposeFile(cfg.ComposeFile, cfg); err == nil {
 		cfg = composeCfg
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return DeployConfig{}, err
 	}
 	if fileCfg, err := loadRuntimeConfig(cfg.ConfigFile, cfg); err == nil {
 		cfg = fileCfg
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return DeployConfig{}, err
 	}
 
 	cfg = applyOverrides(cfg, m.options.Overrides)
@@ -99,8 +109,142 @@ func (m *Manager) loadConfig() (DeployConfig, error) {
 		return DeployConfig{}, err
 	}
 	cfg.BaseDir = baseDir
+	dataDir, err := normalizePathWithinWorkspace(m.options.WorkspaceRoot, cfg.DataDir)
+	if err != nil {
+		return DeployConfig{}, err
+	}
+	cfg.DataDir = dataDir
 	cfg = finalizeDeployConfig(cfg, m.options.UpstreamBaseURL)
 	return cfg, nil
+}
+
+func discoverManagedBaseDir(workspaceRoot string) (string, error) {
+	defaultBaseDir := filepath.Join(workspaceRoot, ".cpa-docker")
+	if looksLikeManagedBaseDir(defaultBaseDir) {
+		return defaultBaseDir, nil
+	}
+
+	candidates, err := scanManagedBaseDirs(workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+	if len(candidates) == 0 {
+		return defaultBaseDir, nil
+	}
+	if len(candidates) == 1 {
+		return candidates[0], nil
+	}
+	return "", fmt.Errorf("检测到多个可接管部署，请显式指定 --base-dir: %s", strings.Join(candidates, ", "))
+}
+
+func scanManagedBaseDirs(workspaceRoot string) ([]string, error) {
+	const maxDepth = 6
+
+	skipDirNames := map[string]struct{}{
+		".git":         {},
+		".tmp":         {},
+		"node_modules": {},
+		"dist":         {},
+		"build":        {},
+	}
+	seen := map[string]struct{}{}
+	candidates := make([]string, 0, 2)
+
+	err := filepath.WalkDir(workspaceRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path != workspaceRoot {
+			relPath, err := filepath.Rel(workspaceRoot, path)
+			if err != nil {
+				return err
+			}
+			depth := strings.Count(filepath.Clean(relPath), string(os.PathSeparator)) + 1
+			if depth > maxDepth {
+				if entry.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+
+		if entry.IsDir() {
+			if _, ok := skipDirNames[entry.Name()]; ok && path != workspaceRoot {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		var candidate string
+		switch entry.Name() {
+		case "cpa-install.env":
+			candidate = filepath.Dir(path)
+		case "docker-compose.yml":
+			if data, err := os.ReadFile(path); err == nil && looksLikeManagedCompose(string(data)) {
+				candidate = filepath.Dir(path)
+			}
+		case "config.yaml":
+			parentDir := filepath.Dir(path)
+			if filepath.Base(parentDir) == "data" && looksLikeManagedBaseDir(filepath.Dir(parentDir)) {
+				candidate = filepath.Dir(parentDir)
+			}
+		}
+		if candidate == "" {
+			return nil
+		}
+		candidate = filepath.Clean(candidate)
+		if _, ok := seen[candidate]; ok {
+			return nil
+		}
+		seen[candidate] = struct{}{}
+		candidates = append(candidates, candidate)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(candidates)
+	return candidates, nil
+}
+
+func looksLikeManagedBaseDir(baseDir string) bool {
+	baseDir = filepath.Clean(strings.TrimSpace(baseDir))
+	if baseDir == "." || baseDir == "" {
+		return false
+	}
+
+	envPath := filepath.Join(baseDir, "cpa-install.env")
+	if data, err := os.ReadFile(envPath); err == nil {
+		content := string(data)
+		if strings.Contains(content, "CPA_BASE_DIR=") || strings.Contains(content, "CPA_IMAGE=") || strings.Contains(content, "CPA_CONTAINER_NAME=") {
+			return true
+		}
+	}
+
+	composePath := filepath.Join(baseDir, "docker-compose.yml")
+	if data, err := os.ReadFile(composePath); err == nil && looksLikeManagedCompose(string(data)) {
+		return true
+	}
+
+	configPath := filepath.Join(baseDir, "data", "config.yaml")
+	if _, err := os.Stat(configPath); err == nil {
+		return true
+	}
+	return false
+}
+
+func looksLikeManagedCompose(content string) bool {
+	content = strings.ToLower(content)
+	switch {
+	case strings.Contains(content, "/cliproxyapi/cliproxyapi"):
+		return true
+	case strings.Contains(content, "eceasy/cli-proxy-api"):
+		return true
+	case strings.Contains(content, "container_name: cpa"):
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeWorkspaceRoot(raw string) (string, error) {
@@ -176,7 +320,13 @@ func defaultDeployConfig(baseDir string) DeployConfig {
 
 func finalizeDeployConfig(cfg DeployConfig, upstreamOverride string) DeployConfig {
 	cfg.BaseDir = filepath.Clean(cfg.BaseDir)
-	cfg.DataDir = filepath.Join(cfg.BaseDir, "data")
+	dataDir := strings.TrimSpace(cfg.DataDir)
+	if dataDir == "" {
+		dataDir = filepath.Join(cfg.BaseDir, "data")
+	} else if !filepath.IsAbs(dataDir) {
+		dataDir = filepath.Join(cfg.BaseDir, dataDir)
+	}
+	cfg.DataDir = filepath.Clean(dataDir)
 	cfg.ComposeFile = filepath.Join(cfg.BaseDir, "docker-compose.yml")
 	cfg.ConfigFile = filepath.Join(cfg.DataDir, "config.yaml")
 	cfg.EnvFile = filepath.Join(cfg.BaseDir, "cpa-install.env")
@@ -256,6 +406,9 @@ func mergeDeployConfig(base, incoming DeployConfig) DeployConfig {
 	}
 	if strings.TrimSpace(incoming.Image) != "" {
 		out.Image = incoming.Image
+	}
+	if strings.TrimSpace(incoming.DataDir) != "" {
+		out.DataDir = incoming.DataDir
 	}
 	if strings.TrimSpace(incoming.ContainerName) != "" {
 		out.ContainerName = incoming.ContainerName
@@ -432,22 +585,46 @@ func loadEnvFile(path string, current DeployConfig) (DeployConfig, error) {
 		case "CPA_BIND_HOST":
 			cfg.BindHost = value
 		case "CPA_HOST_PORT":
-			cfg.HostPort = atoiDefault(value, 0)
+			parsed, parseErr := parsePortNumberStrict(value)
+			if parseErr != nil {
+				return DeployConfig{}, fmt.Errorf("环境变量 %s 无效: %w", key, parseErr)
+			}
+			cfg.HostPort = parsed
 		case "CPA_API_KEY":
 			cfg.APIKey = value
 		case "CPA_MANAGEMENT_SECRET":
 			cfg.ManagementSecret = value
 			cfg.ManagementSecretHashed = isBcryptHash(value)
 		case "CPA_ALLOW_REMOTE_MANAGEMENT":
-			cfg.AllowRemoteManagement = parseBool(value)
+			parsed, parseErr := parseBoolStrict(value)
+			if parseErr != nil {
+				return DeployConfig{}, fmt.Errorf("环境变量 %s 无效: %w", key, parseErr)
+			}
+			cfg.AllowRemoteManagement = parsed
 		case "CPA_DISABLE_CONTROL_PANEL":
-			cfg.DisableControlPanel = parseBool(value)
+			parsed, parseErr := parseBoolStrict(value)
+			if parseErr != nil {
+				return DeployConfig{}, fmt.Errorf("环境变量 %s 无效: %w", key, parseErr)
+			}
+			cfg.DisableControlPanel = parsed
 		case "CPA_DEBUG":
-			cfg.Debug = parseBool(value)
+			parsed, parseErr := parseBoolStrict(value)
+			if parseErr != nil {
+				return DeployConfig{}, fmt.Errorf("环境变量 %s 无效: %w", key, parseErr)
+			}
+			cfg.Debug = parsed
 		case "CPA_USAGE_STATISTICS_ENABLED":
-			cfg.UsageStatisticsEnabled = parseBool(value)
+			parsed, parseErr := parseBoolStrict(value)
+			if parseErr != nil {
+				return DeployConfig{}, fmt.Errorf("环境变量 %s 无效: %w", key, parseErr)
+			}
+			cfg.UsageStatisticsEnabled = parsed
 		case "CPA_REQUEST_RETRY":
-			cfg.RequestRetry = atoiDefault(value, defaultRequestRetry)
+			parsed, parseErr := parseNonNegativeIntStrict(value)
+			if parseErr != nil {
+				return DeployConfig{}, fmt.Errorf("环境变量 %s 无效: %w", key, parseErr)
+			}
+			cfg.RequestRetry = parsed
 		}
 	}
 	return cfg, nil
@@ -474,7 +651,10 @@ func loadComposeFile(path string, current DeployConfig) (DeployConfig, error) {
 		cfg.Image = strings.TrimSpace(service.Image)
 		cfg.ContainerName = strings.TrimSpace(service.ContainerName)
 		for _, port := range service.Ports {
-			bindHost, hostPort, containerPort := parsePortMapping(strings.TrimSpace(port))
+			bindHost, hostPort, containerPort, parseErr := parsePortMappingStrict(strings.TrimSpace(port))
+			if parseErr != nil {
+				return DeployConfig{}, fmt.Errorf("compose 端口映射无效: %w", parseErr)
+			}
 			if bindHost != "" {
 				cfg.BindHost = bindHost
 			}
@@ -486,6 +666,16 @@ func loadComposeFile(path string, current DeployConfig) (DeployConfig, error) {
 			}
 			break
 		}
+		for _, volume := range service.Volumes {
+			hostPath, found, parseErr := parseDataVolume(strings.TrimSpace(volume), filepath.Dir(path))
+			if parseErr != nil {
+				return DeployConfig{}, fmt.Errorf("compose 数据卷无效: %w", parseErr)
+			}
+			if found {
+				cfg.DataDir = hostPath
+				break
+			}
+		}
 		return cfg, nil
 	}
 	return DeployConfig{}, errors.New("compose 中未找到服务定义")
@@ -494,22 +684,6 @@ func loadComposeFile(path string, current DeployConfig) (DeployConfig, error) {
 func loadRuntimeConfig(path string, current DeployConfig) (DeployConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return DeployConfig{}, err
-	}
-	var file struct {
-		Port             int `yaml:"port"`
-		RemoteManagement struct {
-			AllowRemote        bool   `yaml:"allow-remote"`
-			SecretKey          string `yaml:"secret-key"`
-			DisableControlPane bool   `yaml:"disable-control-panel"`
-		} `yaml:"remote-management"`
-		AuthDir                string   `yaml:"auth-dir"`
-		Debug                  bool     `yaml:"debug"`
-		UsageStatisticsEnabled bool     `yaml:"usage-statistics-enabled"`
-		RequestRetry           int      `yaml:"request-retry"`
-		APIKeys                []string `yaml:"api-keys"`
-	}
-	if err = yaml.Unmarshal(data, &file); err != nil {
 		return DeployConfig{}, err
 	}
 	var root yaml.Node
@@ -523,39 +697,70 @@ func loadRuntimeConfig(path string, current DeployConfig) (DeployConfig, error) 
 		return current, nil
 	}
 	if node := lookupMapValue(rootMap, "port"); node != nil {
-		cfg.ContainerPort = atoiDefault(node.Value, current.ContainerPort)
+		parsed, parseErr := parsePortNumberStrict(node.Value)
+		if parseErr != nil {
+			return DeployConfig{}, fmt.Errorf("config.yaml port 无效: %w", parseErr)
+		}
+		cfg.ContainerPort = parsed
 	}
 	if remoteNode := lookupMapValue(rootMap, "remote-management"); remoteNode != nil && remoteNode.Kind == yaml.MappingNode {
 		if node := lookupMapValue(remoteNode, "allow-remote"); node != nil {
-			cfg.AllowRemoteManagement = parseBool(node.Value)
+			parsed, parseErr := parseBoolStrict(node.Value)
+			if parseErr != nil {
+				return DeployConfig{}, fmt.Errorf("config.yaml remote-management.allow-remote 无效: %w", parseErr)
+			}
+			cfg.AllowRemoteManagement = parsed
 		}
 		if node := lookupMapValue(remoteNode, "disable-control-panel"); node != nil {
-			cfg.DisableControlPanel = parseBool(node.Value)
+			parsed, parseErr := parseBoolStrict(node.Value)
+			if parseErr != nil {
+				return DeployConfig{}, fmt.Errorf("config.yaml remote-management.disable-control-panel 无效: %w", parseErr)
+			}
+			cfg.DisableControlPanel = parsed
 		}
 	}
 	if node := lookupMapValue(rootMap, "auth-dir"); node != nil {
 		cfg.AuthDir = strings.TrimSpace(node.Value)
 	}
 	if node := lookupMapValue(rootMap, "debug"); node != nil {
-		cfg.Debug = parseBool(node.Value)
+		parsed, parseErr := parseBoolStrict(node.Value)
+		if parseErr != nil {
+			return DeployConfig{}, fmt.Errorf("config.yaml debug 无效: %w", parseErr)
+		}
+		cfg.Debug = parsed
 	}
 	if node := lookupMapValue(rootMap, "usage-statistics-enabled"); node != nil {
-		cfg.UsageStatisticsEnabled = parseBool(node.Value)
+		parsed, parseErr := parseBoolStrict(node.Value)
+		if parseErr != nil {
+			return DeployConfig{}, fmt.Errorf("config.yaml usage-statistics-enabled 无效: %w", parseErr)
+		}
+		cfg.UsageStatisticsEnabled = parsed
 	}
 	if node := lookupMapValue(rootMap, "request-retry"); node != nil {
-		cfg.RequestRetry = atoiDefault(node.Value, current.RequestRetry)
+		parsed, parseErr := parseNonNegativeIntStrict(node.Value)
+		if parseErr != nil {
+			return DeployConfig{}, fmt.Errorf("config.yaml request-retry 无效: %w", parseErr)
+		}
+		cfg.RequestRetry = parsed
 	}
 
-	if len(file.APIKeys) > 0 && strings.TrimSpace(file.APIKeys[0]) != "" {
-		cfg.APIKey = strings.TrimSpace(file.APIKeys[0])
+	if node := lookupMapValue(rootMap, "api-keys"); node != nil && node.Kind == yaml.SequenceNode && len(node.Content) > 0 {
+		value := strings.TrimSpace(node.Content[0].Value)
+		if value != "" {
+			cfg.APIKey = value
+		}
 	}
-	secret := strings.TrimSpace(file.RemoteManagement.SecretKey)
-	if secret != "" {
-		if isBcryptHash(secret) && current.ManagementSecret != "" {
-			// 已有原始密钥时保留它，避免被哈希值污染。
-		} else {
-			cfg.ManagementSecret = secret
-			cfg.ManagementSecretHashed = isBcryptHash(secret)
+	if remoteNode := lookupMapValue(rootMap, "remote-management"); remoteNode != nil && remoteNode.Kind == yaml.MappingNode {
+		if node := lookupMapValue(remoteNode, "secret-key"); node != nil {
+			secret := strings.TrimSpace(node.Value)
+			if secret != "" {
+				if isBcryptHash(secret) && current.ManagementSecret != "" {
+					// 已有原始密钥时保留它，避免被哈希值污染。
+				} else {
+					cfg.ManagementSecret = secret
+					cfg.ManagementSecretHashed = isBcryptHash(secret)
+				}
+			}
 		}
 	}
 	return cfg, nil
@@ -813,12 +1018,14 @@ func trimShellValue(value string) string {
 	return strings.ReplaceAll(value, `'\''`, `'`)
 }
 
-func parseBool(raw string) bool {
+func parseBoolStrict(raw string) (bool, error) {
 	switch strings.TrimSpace(strings.ToLower(raw)) {
 	case "1", "true", "yes", "y", "on":
-		return true
+		return true, nil
+	case "0", "false", "no", "n", "off":
+		return false, nil
 	default:
-		return false
+		return false, fmt.Errorf("无效布尔值 %q，允许值: true/false", strings.TrimSpace(raw))
 	}
 }
 
@@ -830,17 +1037,94 @@ func atoiDefault(raw string, fallback int) int {
 	return value
 }
 
-func parsePortMapping(raw string) (string, int, int) {
+func parseNonNegativeIntStrict(raw string) (int, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, errors.New("不能为空")
+	}
+	value, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0, fmt.Errorf("必须是非负整数: %q", trimmed)
+	}
+	if value < 0 {
+		return 0, fmt.Errorf("必须是非负整数: %q", trimmed)
+	}
+	return value, nil
+}
+
+func parsePortNumberStrict(raw string) (int, error) {
+	value, err := parseNonNegativeIntStrict(raw)
+	if err != nil {
+		return 0, err
+	}
+	if value < 1 || value > 65535 {
+		return 0, fmt.Errorf("端口必须在 1-65535 之间: %d", value)
+	}
+	return value, nil
+}
+
+func parsePortMappingStrict(raw string) (string, int, int, error) {
 	raw = strings.Trim(raw, `"`)
 	parts := strings.Split(raw, ":")
 	switch len(parts) {
 	case 3:
-		return parts[0], atoiDefault(parts[1], 0), atoiDefault(parts[2], 0)
+		hostPort, err := parsePortNumberStrict(parts[1])
+		if err != nil {
+			return "", 0, 0, err
+		}
+		containerPort, err := parsePortNumberStrict(parts[2])
+		if err != nil {
+			return "", 0, 0, err
+		}
+		return parts[0], hostPort, containerPort, nil
 	case 2:
-		return "", atoiDefault(parts[0], 0), atoiDefault(parts[1], 0)
+		hostPort, err := parsePortNumberStrict(parts[0])
+		if err != nil {
+			return "", 0, 0, err
+		}
+		containerPort, err := parsePortNumberStrict(parts[1])
+		if err != nil {
+			return "", 0, 0, err
+		}
+		return "", hostPort, containerPort, nil
 	default:
-		return "", 0, 0
+		return "", 0, 0, fmt.Errorf("不支持的端口映射格式 %q", raw)
 	}
+}
+
+func parseDataVolume(raw, composeDir string) (string, bool, error) {
+	raw = strings.Trim(raw, `"`)
+	if raw == "" {
+		return "", false, nil
+	}
+
+	parts := strings.Split(raw, ":")
+	if len(parts) < 2 {
+		return "", false, nil
+	}
+
+	target := parts[len(parts)-1]
+	source := parts[len(parts)-2]
+	if len(parts) >= 3 && parts[len(parts)-1] != "/data" {
+		target = parts[len(parts)-2]
+		source = strings.Join(parts[:len(parts)-2], ":")
+	}
+	if target != "/data" {
+		return "", false, nil
+	}
+
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return "", false, fmt.Errorf("挂载 %q 缺少宿主机目录", raw)
+	}
+	if !filepath.IsAbs(source) {
+		source = filepath.Join(composeDir, source)
+	}
+	source, err := normalizeAbsolutePath(source)
+	if err != nil {
+		return "", false, err
+	}
+	return source, true, nil
 }
 
 func compareVersion(latest, current string) int {

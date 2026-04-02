@@ -115,10 +115,13 @@ func TestUninstallDryRunKeepsDataAndBackupsByDefault(t *testing.T) {
 	}
 
 	cfg := defaultDeployConfig(baseDir)
+	cfg.APIKey = "test-api-key"
+	cfg.ManagementSecret = "test-management-secret"
+	if err = seedExistingDeployment(cfg); err != nil {
+		t.Fatalf("seedExistingDeployment failed: %v", err)
+	}
+
 	paths := []string{
-		cfg.ComposeFile,
-		cfg.EnvFile,
-		cfg.ConfigFile,
 		cfg.OperationLogFile,
 		filepath.Join(cfg.BaseDir, "ops", "ops-state.json"),
 		filepath.Join(cfg.DataDir, "auths", "keep.txt"),
@@ -194,10 +197,13 @@ func TestUninstallRemovesManagedFilesAndKeepsUserFiles(t *testing.T) {
 	}
 
 	cfg := defaultDeployConfig(baseDir)
+	cfg.APIKey = "test-api-key"
+	cfg.ManagementSecret = "test-management-secret"
+	if err = seedExistingDeployment(cfg); err != nil {
+		t.Fatalf("seedExistingDeployment failed: %v", err)
+	}
+
 	managedPaths := []string{
-		cfg.ComposeFile,
-		cfg.EnvFile,
-		cfg.ConfigFile,
 		cfg.OperationLogFile,
 		filepath.Join(cfg.BaseDir, "ops", "ops-state.json"),
 		filepath.Join(cfg.BaseDir, "ops", "tasks", "task.log"),
@@ -301,6 +307,175 @@ func TestLoadConfigRejectsEscapedBaseDirFromEnvFile(t *testing.T) {
 	}
 }
 
+func TestNewManagerDiscoversManagedBaseDirWithinWorkspace(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	baseDir := filepath.Join(workspaceRoot, "deployments", ".cpa-docker")
+
+	cfg := defaultDeployConfig(baseDir)
+	cfg.Image = "eceasy/cli-proxy-api:v6.9.3"
+	cfg.ContainerName = "cpa-legacy"
+	cfg.APIKey = "legacy-api-key"
+	cfg.ManagementSecret = "legacy-management-secret"
+	if err := seedExistingDeployment(cfg); err != nil {
+		t.Fatalf("seedExistingDeployment failed: %v", err)
+	}
+
+	manager, err := NewManager(Options{WorkspaceRoot: workspaceRoot})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	currentCfg, err := manager.CurrentConfig()
+	if err != nil {
+		t.Fatalf("CurrentConfig failed: %v", err)
+	}
+	if currentCfg.BaseDir != baseDir {
+		t.Fatalf("base dir = %q, want %q", currentCfg.BaseDir, baseDir)
+	}
+	if currentCfg.ContainerName != "cpa-legacy" {
+		t.Fatalf("container name = %q", currentCfg.ContainerName)
+	}
+}
+
+func TestNewManagerRejectsMultipleManagedBaseDirs(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	for _, dir := range []string{
+		filepath.Join(workspaceRoot, "alpha", ".cpa-docker"),
+		filepath.Join(workspaceRoot, "beta", ".cpa-docker"),
+	} {
+		cfg := defaultDeployConfig(dir)
+		cfg.Image = "eceasy/cli-proxy-api:v6.9.3"
+		cfg.APIKey = "test-api-key"
+		cfg.ManagementSecret = "test-management-secret"
+		if err := seedExistingDeployment(cfg); err != nil {
+			t.Fatalf("seedExistingDeployment failed: %v", err)
+		}
+	}
+
+	_, err := NewManager(Options{WorkspaceRoot: workspaceRoot})
+	if err == nil {
+		t.Fatal("expected multiple managed base dirs to be rejected")
+	}
+	if !strings.Contains(err.Error(), "多个可接管部署") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfigRejectsInvalidBoolFromEnvFile(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	manager, err := NewManager(Options{BaseDir: baseDir, WorkspaceRoot: baseDir})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	cfg := defaultDeployConfig(baseDir)
+	if err = os.MkdirAll(filepath.Dir(cfg.EnvFile), 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	if err = os.WriteFile(cfg.EnvFile, []byte("CPA_DEBUG=maybe\n"), 0o644); err != nil {
+		t.Fatalf("write env failed: %v", err)
+	}
+
+	_, err = manager.loadConfig()
+	if err == nil {
+		t.Fatal("expected invalid bool from env file to be rejected")
+	}
+	if !strings.Contains(err.Error(), "CPA_DEBUG") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfigRejectsInvalidHostPortFromEnvFile(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	manager, err := NewManager(Options{BaseDir: baseDir, WorkspaceRoot: baseDir})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	cfg := defaultDeployConfig(baseDir)
+	if err = os.MkdirAll(filepath.Dir(cfg.EnvFile), 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	if err = os.WriteFile(cfg.EnvFile, []byte("CPA_HOST_PORT=70000\n"), 0o644); err != nil {
+		t.Fatalf("write env failed: %v", err)
+	}
+
+	_, err = manager.loadConfig()
+	if err == nil {
+		t.Fatal("expected invalid host port from env file to be rejected")
+	}
+	if !strings.Contains(err.Error(), "CPA_HOST_PORT") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfigRejectsInvalidBoolFromRuntimeConfig(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	manager, err := NewManager(Options{BaseDir: baseDir, WorkspaceRoot: baseDir})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	cfg := defaultDeployConfig(baseDir)
+	if err = os.MkdirAll(filepath.Dir(cfg.ConfigFile), 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	content := `port: 8317
+remote-management:
+  allow-remote: enabled
+`
+	if err = os.WriteFile(cfg.ConfigFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	_, err = manager.loadConfig()
+	if err == nil {
+		t.Fatal("expected invalid bool from runtime config to be rejected")
+	}
+	if !strings.Contains(err.Error(), "allow-remote") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfigRejectsInvalidRequestRetryFromRuntimeConfig(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	manager, err := NewManager(Options{BaseDir: baseDir, WorkspaceRoot: baseDir})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	cfg := defaultDeployConfig(baseDir)
+	if err = os.MkdirAll(filepath.Dir(cfg.ConfigFile), 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	content := `port: 8317
+request-retry: -2
+`
+	if err = os.WriteFile(cfg.ConfigFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	_, err = manager.loadConfig()
+	if err == nil {
+		t.Fatal("expected invalid request retry from runtime config to be rejected")
+	}
+	if !strings.Contains(err.Error(), "request-retry") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestBuildReleaseInfoFromGitHubMergesMissingReleases(t *testing.T) {
 	t.Parallel()
 
@@ -400,6 +575,7 @@ func TestCheckUpdateReturnsMergedReleaseRange(t *testing.T) {
 
 	cfg := defaultDeployConfig(baseDir)
 	cfg.Image = "eceasy/cli-proxy-api:v1.0.0"
+	cfg.HostPort = 39081
 	if err = manager.saveState(cfg, ReleaseInfo{CurrentVersion: "v1.0.0"}, ""); err != nil {
 		t.Fatalf("saveState failed: %v", err)
 	}
@@ -624,5 +800,53 @@ func TestShouldRetryGitHubError(t *testing.T) {
 	}
 	if shouldRetryGitHubError(context.Canceled) {
 		t.Fatal("context canceled should not be retriable")
+	}
+}
+
+func TestProbeCurrentVersionStopsRetryingWhenOnlyHashedSecretIsAvailable(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v0/management/config" {
+			http.NotFound(w, r)
+			return
+		}
+		attempts.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	baseDir := t.TempDir()
+	manager, err := NewManager(Options{
+		BaseDir:         baseDir,
+		WorkspaceRoot:   baseDir,
+		UpstreamBaseURL: server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	cfg := defaultDeployConfig(baseDir)
+	cfg.Image = "eceasy/cli-proxy-api:v1.2.3"
+	cfg.RequestRetry = 5
+	cfg.ManagementSecret = "$2a$10$abcdefghijklmnopqrstuv1234567890abcdefghijklmn"
+	cfg.ManagementSecretHashed = true
+	if err = os.MkdirAll(filepath.Dir(cfg.ConfigFile), 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	if err = writeInitialConfigFile(cfg); err != nil {
+		t.Fatalf("writeInitialConfigFile failed: %v", err)
+	}
+	if err = manager.saveState(cfg, ReleaseInfo{CurrentVersion: "v1.2.3"}, ""); err != nil {
+		t.Fatalf("saveState failed: %v", err)
+	}
+
+	version, _, _ := manager.probeCurrentVersion(context.Background(), "")
+	if version != "v1.2.3" {
+		t.Fatalf("version = %q, want %q", version, "v1.2.3")
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts.Load())
 	}
 }

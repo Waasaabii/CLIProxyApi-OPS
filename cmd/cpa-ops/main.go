@@ -373,7 +373,29 @@ func buildManager(args []string) (*ops.Manager, string, error) {
 	if err := flags.Parse(args); err != nil {
 		return nil, "", err
 	}
+	if *hostPort < 0 || *hostPort > 65535 {
+		return nil, "", fmt.Errorf("--host-port 参数无效: 端口必须在 1-65535 之间")
+	}
+	if *requestRetry < -1 {
+		return nil, "", fmt.Errorf("--request-retry 参数无效: 必须是非负整数")
+	}
 	imageValue, imageExplicit := resolveImageOverride(*image, *version)
+	allowRemoteValue, err := parseOptionalBool(*allowRemote)
+	if err != nil {
+		return nil, "", fmt.Errorf("--allow-remote-management 参数无效: %w", err)
+	}
+	disableControlPanelValue, err := parseOptionalBool(*disableControlPanel)
+	if err != nil {
+		return nil, "", fmt.Errorf("--disable-control-panel 参数无效: %w", err)
+	}
+	debugValue, err := parseOptionalBool(*debug)
+	if err != nil {
+		return nil, "", fmt.Errorf("--debug 参数无效: %w", err)
+	}
+	usageStatsValue, err := parseOptionalBool(*usageStats)
+	if err != nil {
+		return nil, "", fmt.Errorf("--usage-statistics-enabled 参数无效: %w", err)
+	}
 
 	manager, err := ops.NewManager(ops.Options{
 		BaseDir:         *baseDir,
@@ -386,10 +408,10 @@ func buildManager(args []string) (*ops.Manager, string, error) {
 			HostPort:               *hostPort,
 			APIKey:                 *apiKey,
 			ManagementSecret:       *managementSecret,
-			AllowRemoteManagement:  parseOptionalBool(*allowRemote),
-			DisableControlPanel:    parseOptionalBool(*disableControlPanel),
-			Debug:                  parseOptionalBool(*debug),
-			UsageStatisticsEnabled: parseOptionalBool(*usageStats),
+			AllowRemoteManagement:  allowRemoteValue,
+			DisableControlPanel:    disableControlPanelValue,
+			Debug:                  debugValue,
+			UsageStatisticsEnabled: usageStatsValue,
 			RequestRetry:           *requestRetry,
 			RequestRetryExplicit:   *requestRetry >= 0,
 		},
@@ -412,18 +434,18 @@ func resolveImageOverride(image, version string) (string, bool) {
 	return "eceasy/cli-proxy-api:" + strings.TrimPrefix(version, ":"), true
 }
 
-func parseOptionalBool(raw string) *bool {
+func parseOptionalBool(raw string) (*bool, error) {
 	switch strings.TrimSpace(strings.ToLower(raw)) {
 	case "":
-		return nil
+		return nil, nil
 	case "true", "1", "yes", "y":
 		value := true
-		return &value
+		return &value, nil
 	case "false", "0", "no", "n":
 		value := false
-		return &value
+		return &value, nil
 	default:
-		return nil
+		return nil, fmt.Errorf("无效布尔值 %q，允许值: true/false", strings.TrimSpace(raw))
 	}
 }
 
