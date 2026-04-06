@@ -7,7 +7,7 @@ REPO_NAME=${REPO_NAME:-CLIProxyApi-OPS}
 GITHUB_API_BASE=${CPA_OPS_GITHUB_API_BASE:-https://api.github.com/repos/$REPO_OWNER/$REPO_NAME}
 RELEASE_BASE_URL=${CPA_OPS_RELEASE_BASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases}
 WORKSPACE_ROOT=$(pwd)
-INSTALL_ROOT=${CPA_OPS_INSTALL_ROOT:-"$WORKSPACE_ROOT/.tmp/releases"}
+INSTALL_ROOT=${CPA_OPS_INSTALL_ROOT:-"$WORKSPACE_ROOT"}
 
 trim_spaces() {
   printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
@@ -113,11 +113,11 @@ build_asset_names() {
 print_usage() {
   cat <<EOF
 用法:
-  sh install-release.sh [--version vX.Y.Z] [--install-root ./.tmp/releases] [--no-run] [-- <cpa-ops 参数>]
+  sh install-release.sh [--version vX.Y.Z] [--install-root .] [--no-run] [-- <cpa-ops 参数>]
 
 说明:
   - 默认下载最新 release
-  - 默认下载到当前工作区的 ./.tmp/releases/<version>/cpa-ops
+  - 默认下载到当前工作区的 ./cpa-ops
   - 如果当前是交互终端且没有额外参数，下载完成后直接进入 cpa-ops 交互菜单
 EOF
 }
@@ -166,21 +166,21 @@ if [ -z "$version" ]; then
 fi
 
 INSTALL_ROOT=$(normalize_workspace_path "$INSTALL_ROOT")
-version_dir=$(normalize_workspace_path "$INSTALL_ROOT/$version")
-binary_path="$version_dir/$binary_name"
+binary_path="$INSTALL_ROOT/$binary_name"
+temp_binary_path="$INSTALL_ROOT/.${binary_name}.download.$$"
 
-mkdir -p "$version_dir"
+mkdir -p "$INSTALL_ROOT"
 
-if [ ! -f "$binary_path" ]; then
-  if [ "$version" = "latest" ]; then
-    download_url="$RELEASE_BASE_URL/latest/download/$asset_name"
-  else
-    download_url="$RELEASE_BASE_URL/download/$version/$asset_name"
-  fi
-
-  printf '下载 %s\n' "$download_url"
-  curl -fL "$download_url" -o "$binary_path" || fail "下载 release 二进制失败"
+if [ "$version" = "latest" ]; then
+  download_url="$RELEASE_BASE_URL/latest/download/$asset_name"
+else
+  download_url="$RELEASE_BASE_URL/download/$version/$asset_name"
 fi
+
+rm -f "$temp_binary_path"
+printf '下载 %s\n' "$download_url"
+curl -fL "$download_url" -o "$temp_binary_path" || fail "下载 release 二进制失败"
+mv "$temp_binary_path" "$binary_path"
 
 [ -f "$binary_path" ] || fail "未找到二进制: $binary_path"
 chmod +x "$binary_path" 2>/dev/null || true

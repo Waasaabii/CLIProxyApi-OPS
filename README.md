@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/Waasaabii/CLIProxyApi-OPS/main/inst
 
 - 自动识别当前平台
 - 下载最新 release
-- 下载到当前工作区的 `./.tmp/releases/<version>/cpa-ops`
+- 下载到当前目录的 `./cpa-ops`
 - 直接启动 `cpa-ops` 交互终端
 
 安装指定版本：
@@ -62,6 +62,12 @@ curl -fsSL https://raw.githubusercontent.com/Waasaabii/CLIProxyApi-OPS/main/inst
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Waasaabii/CLIProxyApi-OPS/main/install-release.sh | sh -s -- --no-run
+```
+
+下载到指定目录：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Waasaabii/CLIProxyApi-OPS/main/install-release.sh | sh -s -- --install-root ./bin --no-run
 ```
 
 如果你更喜欢像宝塔那样“直接下载一个可执行文件再运行”，可以直接使用 GitHub Release 资产。
