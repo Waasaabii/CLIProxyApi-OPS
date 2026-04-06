@@ -893,6 +893,10 @@ func randomSecret(length int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
+func GenerateSecret(length int) (string, error) {
+	return randomSecret(length)
+}
+
 func (m *Manager) withOperationLock(fn func() error) error {
 	cfg := defaultDeployConfig(m.options.BaseDir)
 	lockPath := filepath.Join(cfg.BaseDir, "ops", "operation.lock")

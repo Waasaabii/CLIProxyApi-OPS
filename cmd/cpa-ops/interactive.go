@@ -263,18 +263,20 @@ func runInteractiveManagementSecret(ctx context.Context, reader *bufio.Reader, b
 
 	fmt.Println("当前管理密钥状态:")
 	printManagementSecret(cfg)
-	fmt.Println("留空直接回车表示返回，不做修改。")
+	fmt.Println("1. 自动生成新的管理密钥")
+	fmt.Println("2. 手动输入新的管理密钥")
+	fmt.Println("0. 返回")
 
-	defaultValue := ""
-	if !cfg.ManagementSecretHashed {
-		defaultValue = strings.TrimSpace(cfg.ManagementSecret)
-	}
-	nextSecret, err := promptInput(reader, "请输入新的管理密钥", defaultValue)
+	action, err := promptInput(reader, "请选择操作", "1")
 	if err != nil {
 		return err
 	}
-	nextSecret = strings.TrimSpace(nextSecret)
-	if nextSecret == "" {
+
+	nextSecret, changed, err := promptInteractiveSecretValue(reader, "管理密钥", strings.TrimSpace(cfg.ManagementSecret), strings.TrimSpace(action), true)
+	if err != nil {
+		return err
+	}
+	if !changed {
 		fmt.Println("已取消修改管理密钥。")
 		return nil
 	}
@@ -298,6 +300,7 @@ func runInteractiveManagementSecret(ctx context.Context, reader *bufio.Reader, b
 		return err
 	}
 	fmt.Println("管理密钥已更新。")
+	fmt.Printf("新的管理密钥: %s\n", nextSecret)
 	return nil
 }
 
@@ -408,7 +411,7 @@ func promptDeployOverrideArgs(reader *bufio.Reader, baseDir, upstreamBaseURL str
 	}
 	args = append(args, "--host-port", strconv.Itoa(hostPort))
 
-	apiKey, err := promptInput(reader, "CPA API Key（留空保持当前/自动生成）", strings.TrimSpace(cfg.APIKey))
+	apiKey, err := promptOptionalSecretOverride(reader, "CPA API Key", strings.TrimSpace(cfg.APIKey))
 	if err != nil {
 		return nil, err
 	}
@@ -420,7 +423,7 @@ func promptDeployOverrideArgs(reader *bufio.Reader, baseDir, upstreamBaseURL str
 	if !cfg.ManagementSecretHashed {
 		managementDefault = strings.TrimSpace(cfg.ManagementSecret)
 	}
-	managementSecret, err := promptInput(reader, "管理密钥（留空保持当前/自动生成）", managementDefault)
+	managementSecret, err := promptOptionalSecretOverride(reader, "管理密钥", managementDefault)
 	if err != nil {
 		return nil, err
 	}
@@ -578,6 +581,73 @@ func promptBoolInput(reader *bufio.Reader, label string, defaultValue bool) (boo
 		return false, err
 	}
 	return parseYes(raw, defaultValue), nil
+}
+
+func promptOptionalSecretOverride(reader *bufio.Reader, label, defaultValue string) (string, error) {
+	raw, err := promptInput(reader, label+"（回车保持当前/默认行为，输入 /gen 自动生成）", defaultValue)
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSpace(raw)
+	if isGenerateShortcut(value) {
+		generated, err := ops.GenerateSecret(32)
+		if err != nil {
+			return "", err
+		}
+		fmt.Printf("%s 已自动生成: %s\n", label, generated)
+		return generated, nil
+	}
+	return value, nil
+}
+
+func promptInteractiveSecretValue(reader *bufio.Reader, label, currentValue, action string, allowGenerate bool) (string, bool, error) {
+	switch normalizeInteractiveChoice(action) {
+	case "", "0", "q", "quit", "back":
+		return "", false, nil
+	case "1":
+		if !allowGenerate {
+			return "", false, fmt.Errorf("当前操作不支持自动生成 %s", label)
+		}
+		generated, err := ops.GenerateSecret(32)
+		if err != nil {
+			return "", false, err
+		}
+		fmt.Printf("%s 已自动生成: %s\n", label, generated)
+		return generated, true, nil
+	case "2":
+		value, err := promptInput(reader, "请输入新的"+label, currentValue)
+		if err != nil {
+			return "", false, err
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return "", false, nil
+		}
+		if isGenerateShortcut(value) {
+			generated, err := ops.GenerateSecret(32)
+			if err != nil {
+				return "", false, err
+			}
+			fmt.Printf("%s 已自动生成: %s\n", label, generated)
+			return generated, true, nil
+		}
+		return value, true, nil
+	default:
+		return "", false, fmt.Errorf("无效选项: %s", strings.TrimSpace(action))
+	}
+}
+
+func normalizeInteractiveChoice(value string) string {
+	return strings.TrimSpace(strings.ToLower(value))
+}
+
+func isGenerateShortcut(value string) bool {
+	switch normalizeInteractiveChoice(value) {
+	case "/gen", "gen", "g":
+		return true
+	default:
+		return false
+	}
 }
 
 func promptIntInput(reader *bufio.Reader, label string, defaultValue int, allowZero bool) (int, error) {
