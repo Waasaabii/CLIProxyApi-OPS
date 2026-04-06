@@ -165,9 +165,7 @@ func (m *Manager) Backup(ctx context.Context, logger Logger) (Snapshot, error) {
 
 	state, stateErr := m.loadState()
 	if stateErr == nil {
-		safeCfg := cfg
-		safeCfg.ManagementSecret = ""
-		state.Config = safeCfg
+		state.Config = cfg
 		if strings.TrimSpace(state.Release.CurrentVersion) == "" {
 			state.Release.CurrentVersion = strings.TrimSpace(state.CurrentVersion)
 		}
@@ -533,7 +531,7 @@ func (m *Manager) persistRuntimeState(ctx context.Context, cfg DeployConfig, aut
 	if err != nil {
 		return nil
 	}
-	return writeFileAtomic(cfg.StateFile, data, 0o644)
+	return writeFileAtomic(cfg.StateFile, data, 0o600)
 }
 
 func (m *Manager) resolveManagementToken(cfg DeployConfig, provided string) string {
@@ -734,7 +732,7 @@ func writeEnvFileAtomic(cfg DeployConfig) error {
 		fmt.Sprintf("CPA_REQUEST_RETRY=%d", cfg.RequestRetry),
 		"",
 	}, "\n")
-	return writeFileAtomic(cfg.EnvFile, []byte(content), 0o644)
+	return writeFileAtomic(cfg.EnvFile, []byte(content), 0o600)
 }
 
 func writeComposeFileAtomic(cfg DeployConfig) error {

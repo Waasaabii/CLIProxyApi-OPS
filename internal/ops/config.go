@@ -464,10 +464,8 @@ func (m *Manager) loadState() (RuntimeState, error) {
 }
 
 func (m *Manager) saveState(cfg DeployConfig, release ReleaseInfo, lastBackup string) error {
-	safeCfg := cfg
-	safeCfg.ManagementSecret = ""
 	state := RuntimeState{
-		Config:           safeCfg,
+		Config:           cfg,
 		Release:          release,
 		CurrentVersion:   release.CurrentVersion,
 		LastBackup:       lastBackup,
@@ -482,7 +480,7 @@ func (m *Manager) saveState(cfg DeployConfig, release ReleaseInfo, lastBackup st
 	if err = os.MkdirAll(filepath.Dir(cfg.StateFile), 0o755); err != nil {
 		return err
 	}
-	return writeFileAtomic(cfg.StateFile, data, 0o644)
+	return writeFileAtomic(cfg.StateFile, data, 0o600)
 }
 
 func writeRuntimeState(state RuntimeState) error {
@@ -490,7 +488,7 @@ func writeRuntimeState(state RuntimeState) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(state.Config.StateFile, data, 0o644)
+	return writeFileAtomic(state.Config.StateFile, data, 0o600)
 }
 
 func fallbackReleaseFromState(state RuntimeState, currentVersion string) (ReleaseInfo, bool) {

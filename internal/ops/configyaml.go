@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
+	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 )
 
@@ -16,6 +18,11 @@ func (m *Manager) syncConfigFile(cfg DeployConfig) error {
 }
 
 func writeInitialConfigFile(cfg DeployConfig) error {
+	managementSecret, err := runtimeConfigManagementSecret(cfg.ManagementSecret)
+	if err != nil {
+		return err
+	}
+
 	root := &yaml.Node{Kind: yaml.DocumentNode}
 	mapping := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	root.Content = []*yaml.Node{mapping}
@@ -23,7 +30,7 @@ func writeInitialConfigFile(cfg DeployConfig) error {
 	setMapScalar(mapping, "port", strconv.Itoa(cfg.ContainerPort), "!!int")
 	remote := ensureMapValue(mapping, "remote-management")
 	setMapScalar(remote, "allow-remote", boolToYAML(cfg.AllowRemoteManagement), "!!bool")
-	setMapScalar(remote, "secret-key", cfg.ManagementSecret, "!!str")
+	setMapScalar(remote, "secret-key", managementSecret, "!!str")
 	setMapScalar(remote, "disable-control-panel", boolToYAML(cfg.DisableControlPanel), "!!bool")
 	setMapScalar(mapping, "auth-dir", cfg.AuthDir, "!!str")
 	setMapScalar(mapping, "debug", boolToYAML(cfg.Debug), "!!bool")
@@ -48,6 +55,11 @@ func writeInitialConfigFile(cfg DeployConfig) error {
 }
 
 func mergeConfigFile(cfg DeployConfig) error {
+	managementSecret, err := runtimeConfigManagementSecret(cfg.ManagementSecret)
+	if err != nil {
+		return err
+	}
+
 	data, err := os.ReadFile(cfg.ConfigFile)
 	if err != nil {
 		return err
@@ -67,7 +79,7 @@ func mergeConfigFile(cfg DeployConfig) error {
 	setMapScalar(mapping, "port", strconv.Itoa(cfg.ContainerPort), "!!int")
 	remote := ensureMapValue(mapping, "remote-management")
 	setMapScalar(remote, "allow-remote", boolToYAML(cfg.AllowRemoteManagement), "!!bool")
-	setMapScalar(remote, "secret-key", cfg.ManagementSecret, "!!str")
+	setMapScalar(remote, "secret-key", managementSecret, "!!str")
 	setMapScalar(remote, "disable-control-panel", boolToYAML(cfg.DisableControlPanel), "!!bool")
 	setMapScalar(mapping, "auth-dir", cfg.AuthDir, "!!str")
 	setMapScalar(mapping, "debug", boolToYAML(cfg.Debug), "!!bool")
@@ -138,4 +150,16 @@ func boolToYAML(value bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+func runtimeConfigManagementSecret(secret string) (string, error) {
+	secret = strings.TrimSpace(secret)
+	if secret == "" || isBcryptHash(secret) {
+		return secret, nil
+	}
+	hashed, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
+	if err != nil {
+		return "", fmt.Errorf("生成管理密钥哈希失败: %w", err)
+	}
+	return string(hashed), nil
 }

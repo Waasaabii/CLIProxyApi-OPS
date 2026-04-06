@@ -129,6 +129,7 @@ go build -o ./cpa-ops ./cmd/cpa-ops
 ./cpa-ops update
 ./cpa-ops update --version v6.9.3
 ./cpa-ops repair
+./cpa-ops management-secret
 ./cpa-ops check-update
 ./cpa-ops release-notes
 ./cpa-ops backup

@@ -37,11 +37,12 @@ func runInteractiveMenu(ctx context.Context) error {
 		fmt.Println("7. 查看合并 release 说明")
 		fmt.Println("8. 查看部署状态")
 		fmt.Println("9. 查看部署信息")
-		fmt.Println("10. 创建备份")
-		fmt.Println("11. 从备份恢复")
-		fmt.Println("12. 卸载部署")
-		fmt.Println("13. 启动运维代理服务")
-		fmt.Println("14. 切换部署目录")
+		fmt.Println("10. 查看管理密钥")
+		fmt.Println("11. 创建备份")
+		fmt.Println("12. 从备份恢复")
+		fmt.Println("13. 卸载部署")
+		fmt.Println("14. 启动运维代理服务")
+		fmt.Println("15. 切换部署目录")
 		fmt.Println("0. 退出")
 
 		choice, err := promptInput(reader, "请选择操作", "")
@@ -101,10 +102,14 @@ func runInteractiveMenu(ctx context.Context) error {
 				fmt.Printf("读取信息失败: %v\n", err)
 			}
 		case "10":
+			if err = runManagementSecret(ctx, []string{"--base-dir", baseDir}); err != nil {
+				fmt.Printf("读取管理密钥失败: %v\n", err)
+			}
+		case "11":
 			if err = runBackup(ctx, []string{"--base-dir", baseDir}); err != nil {
 				fmt.Printf("备份失败: %v\n", err)
 			}
-		case "11":
+		case "12":
 			snapshot, promptErr := promptInput(reader, "请输入备份文件名（留空表示最新）", "")
 			if promptErr != nil {
 				return promptErr
@@ -116,17 +121,17 @@ func runInteractiveMenu(ctx context.Context) error {
 			if err = runRestore(ctx, args); err != nil {
 				fmt.Printf("恢复失败: %v\n", err)
 			}
-		case "12":
+		case "13":
 			if err = runInteractiveUninstall(ctx, reader, baseDir); err != nil {
 				fmt.Printf("卸载失败: %v\n", err)
 			}
-		case "13":
+		case "14":
 			listen, promptErr := promptInput(reader, "监听地址", "127.0.0.1:18318")
 			if promptErr != nil {
 				return promptErr
 			}
 			return runServe(ctx, []string{"--base-dir", baseDir, "--listen", listen})
-		case "14":
+		case "15":
 			nextBaseDir, promptErr := promptInput(reader, "请输入新的部署目录", baseDir)
 			if promptErr != nil {
 				return promptErr

@@ -51,6 +51,8 @@ func run(args []string) error {
 		return runStatus(ctx, args[1:])
 	case "info":
 		return runInfo(ctx, args[1:])
+	case "management-secret":
+		return runManagementSecret(ctx, args[1:])
 	case "logs":
 		return runLogs(ctx, args[1:])
 	case "check-update":
@@ -77,6 +79,7 @@ func printUsage() {
   cpa-ops uninstall       卸载当前部署
   cpa-ops status          查看容器状态
   cpa-ops info            查看部署信息
+  cpa-ops management-secret 查看管理密钥
   cpa-ops logs            查看运维日志
   cpa-ops check-update    检查最新版本
  cpa-ops release-notes   查看最新 release 说明
@@ -235,11 +238,20 @@ func runInfo(ctx context.Context, args []string) error {
 	fmt.Printf("有新版本: %t\n", info.Version.HasUpdate)
 	fmt.Printf("容器状态: %s\n", info.Status.State)
 	fmt.Printf("最近备份: %s\n", blankFallback(info.LastBackup))
-	if info.Config.ManagementSecretHashed {
-		fmt.Printf("管理密钥: [已哈希保存，不可回显]\n")
-	} else {
-		fmt.Printf("管理密钥: %s\n", info.Config.ManagementSecret)
+	printManagementSecret(info.Config)
+	return nil
+}
+
+func runManagementSecret(ctx context.Context, args []string) error {
+	manager, _, err := buildManager(args)
+	if err != nil {
+		return err
 	}
+	cfg, err := manager.CurrentConfig()
+	if err != nil {
+		return err
+	}
+	printManagementSecret(cfg)
 	return nil
 }
 
@@ -454,6 +466,18 @@ func blankFallback(value string) string {
 		return "未知"
 	}
 	return value
+}
+
+func printManagementSecret(cfg ops.DeployConfig) {
+	secret := strings.TrimSpace(cfg.ManagementSecret)
+	switch {
+	case secret == "":
+		fmt.Printf("管理密钥: [未设置]\n")
+	case cfg.ManagementSecretHashed:
+		fmt.Printf("管理密钥: [当前仅检测到哈希值，请通过 --management-secret 重新设置]\n")
+	default:
+		fmt.Printf("管理密钥: %s\n", secret)
+	}
 }
 
 func isInteractiveTerminal() bool {

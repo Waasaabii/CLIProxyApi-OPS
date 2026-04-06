@@ -84,11 +84,91 @@ api-keys:
 	if !strings.Contains(content, "custom-setting: keep-me") {
 		t.Fatalf("未知字段被覆盖了:\n%s", content)
 	}
-	if !strings.Contains(content, "secret-key: secret-1") {
-		t.Fatalf("管理密钥未更新:\n%s", content)
+	if strings.Contains(content, "secret-key: secret-1") {
+		t.Fatalf("管理密钥不应以明文写入 config.yaml:\n%s", content)
+	}
+	if !strings.Contains(content, "secret-key: $2") {
+		t.Fatalf("管理密钥未写入 bcrypt 哈希:\n%s", content)
 	}
 	if !strings.Contains(content, "- api-key-1") {
 		t.Fatalf("API Key 未更新:\n%s", content)
+	}
+}
+
+func TestManagementSecretStaysPlainInLocalFilesAndHashedInRuntimeConfig(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	manager, err := NewManager(Options{BaseDir: baseDir, WorkspaceRoot: baseDir})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	cfg := defaultDeployConfig(baseDir)
+	cfg.APIKey = "api-key-1"
+	cfg.ManagementSecret = "secret-1"
+
+	if err = manager.persistDeploymentFiles(cfg); err != nil {
+		t.Fatalf("persistDeploymentFiles failed: %v", err)
+	}
+	if err = manager.saveState(cfg, ReleaseInfo{CurrentVersion: "v1.0.0"}, ""); err != nil {
+		t.Fatalf("saveState failed: %v", err)
+	}
+
+	configData, err := os.ReadFile(cfg.ConfigFile)
+	if err != nil {
+		t.Fatalf("read config failed: %v", err)
+	}
+	configText := string(configData)
+	if strings.Contains(configText, "secret-key: secret-1") {
+		t.Fatalf("config.yaml 不应保存明文管理密钥:\n%s", configText)
+	}
+	if !strings.Contains(configText, "secret-key: $2") {
+		t.Fatalf("config.yaml 未写入 bcrypt 哈希:\n%s", configText)
+	}
+
+	envData, err := os.ReadFile(cfg.EnvFile)
+	if err != nil {
+		t.Fatalf("read env failed: %v", err)
+	}
+	if !strings.Contains(string(envData), "CPA_MANAGEMENT_SECRET='secret-1'") {
+		t.Fatalf("env 文件未保存原始管理密钥:\n%s", string(envData))
+	}
+	envInfo, err := os.Stat(cfg.EnvFile)
+	if err != nil {
+		t.Fatalf("stat env failed: %v", err)
+	}
+	if envInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("env 文件权限 = %o, want 600", envInfo.Mode().Perm())
+	}
+
+	state, err := manager.loadState()
+	if err != nil {
+		t.Fatalf("loadState failed: %v", err)
+	}
+	if state.Config.ManagementSecret != "secret-1" {
+		t.Fatalf("state 管理密钥 = %q, want %q", state.Config.ManagementSecret, "secret-1")
+	}
+	stateInfo, err := os.Stat(cfg.StateFile)
+	if err != nil {
+		t.Fatalf("stat state failed: %v", err)
+	}
+	if stateInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("state 文件权限 = %o, want 600", stateInfo.Mode().Perm())
+	}
+
+	if err = os.Remove(cfg.EnvFile); err != nil {
+		t.Fatalf("remove env failed: %v", err)
+	}
+	loadedCfg, err := manager.CurrentConfig()
+	if err != nil {
+		t.Fatalf("CurrentConfig failed: %v", err)
+	}
+	if loadedCfg.ManagementSecret != "secret-1" {
+		t.Fatalf("loaded 管理密钥 = %q, want %q", loadedCfg.ManagementSecret, "secret-1")
+	}
+	if loadedCfg.ManagementSecretHashed {
+		t.Fatal("loaded 管理密钥不应被哈希值污染")
 	}
 }
 
