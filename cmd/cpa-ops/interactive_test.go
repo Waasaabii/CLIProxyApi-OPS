@@ -73,7 +73,9 @@ func TestPromptInteractiveSecretValueManual(t *testing.T) {
 	t.Parallel()
 
 	reader := bufio.NewReader(strings.NewReader("manual-secret\n"))
-	value, changed, err := promptInteractiveSecretValue(reader, "管理密钥", "old-secret", "2", true)
+	value, changed, err := promptInteractiveSecretValue(reader, "管理密钥", "old-secret", "2", func() (string, error) {
+		return "MGT-generated", nil
+	})
 	if err != nil {
 		t.Fatalf("promptInteractiveSecretValue failed: %v", err)
 	}
@@ -89,7 +91,9 @@ func TestPromptInteractiveSecretValueCancel(t *testing.T) {
 	t.Parallel()
 
 	reader := bufio.NewReader(strings.NewReader(""))
-	value, changed, err := promptInteractiveSecretValue(reader, "管理密钥", "old-secret", "0", true)
+	value, changed, err := promptInteractiveSecretValue(reader, "管理密钥", "old-secret", "0", func() (string, error) {
+		return "MGT-generated", nil
+	})
 	if err != nil {
 		t.Fatalf("promptInteractiveSecretValue failed: %v", err)
 	}
@@ -98,5 +102,38 @@ func TestPromptInteractiveSecretValueCancel(t *testing.T) {
 	}
 	if value != "" {
 		t.Fatalf("value = %q, want empty", value)
+	}
+}
+
+func TestPromptInteractiveSecretValueGenerate(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(strings.NewReader(""))
+	value, changed, err := promptInteractiveSecretValue(reader, "管理密钥", "old-secret", "1", func() (string, error) {
+		return "MGT-auto-generated", nil
+	})
+	if err != nil {
+		t.Fatalf("promptInteractiveSecretValue failed: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected changed to be true")
+	}
+	if value != "MGT-auto-generated" {
+		t.Fatalf("value = %q, want %q", value, "MGT-auto-generated")
+	}
+}
+
+func TestPromptOptionalGeneratedValueShortcut(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(strings.NewReader("/gen\n"))
+	value, err := promptOptionalGeneratedValue(reader, "CPA API Key", "", func() (string, error) {
+		return "sk-auto-generated", nil
+	})
+	if err != nil {
+		t.Fatalf("promptOptionalGeneratedValue failed: %v", err)
+	}
+	if value != "sk-auto-generated" {
+		t.Fatalf("value = %q, want %q", value, "sk-auto-generated")
 	}
 }

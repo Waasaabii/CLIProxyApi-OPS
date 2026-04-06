@@ -272,7 +272,7 @@ func runInteractiveManagementSecret(ctx context.Context, reader *bufio.Reader, b
 		return err
 	}
 
-	nextSecret, changed, err := promptInteractiveSecretValue(reader, "管理密钥", strings.TrimSpace(cfg.ManagementSecret), strings.TrimSpace(action), true)
+	nextSecret, changed, err := promptInteractiveSecretValue(reader, "管理密钥", strings.TrimSpace(cfg.ManagementSecret), strings.TrimSpace(action), ops.GenerateManagementSecret)
 	if err != nil {
 		return err
 	}
@@ -411,7 +411,7 @@ func promptDeployOverrideArgs(reader *bufio.Reader, baseDir, upstreamBaseURL str
 	}
 	args = append(args, "--host-port", strconv.Itoa(hostPort))
 
-	apiKey, err := promptOptionalSecretOverride(reader, "CPA API Key", strings.TrimSpace(cfg.APIKey))
+	apiKey, err := promptOptionalGeneratedValue(reader, "CPA API Key", strings.TrimSpace(cfg.APIKey), ops.GenerateAPIKey)
 	if err != nil {
 		return nil, err
 	}
@@ -423,7 +423,7 @@ func promptDeployOverrideArgs(reader *bufio.Reader, baseDir, upstreamBaseURL str
 	if !cfg.ManagementSecretHashed {
 		managementDefault = strings.TrimSpace(cfg.ManagementSecret)
 	}
-	managementSecret, err := promptOptionalSecretOverride(reader, "管理密钥", managementDefault)
+	managementSecret, err := promptOptionalGeneratedValue(reader, "管理密钥", managementDefault, ops.GenerateManagementSecret)
 	if err != nil {
 		return nil, err
 	}
@@ -583,14 +583,17 @@ func promptBoolInput(reader *bufio.Reader, label string, defaultValue bool) (boo
 	return parseYes(raw, defaultValue), nil
 }
 
-func promptOptionalSecretOverride(reader *bufio.Reader, label, defaultValue string) (string, error) {
+func promptOptionalGeneratedValue(reader *bufio.Reader, label, defaultValue string, generator func() (string, error)) (string, error) {
 	raw, err := promptInput(reader, label+"（回车保持当前/默认行为，输入 /gen 自动生成）", defaultValue)
 	if err != nil {
 		return "", err
 	}
 	value := strings.TrimSpace(raw)
 	if isGenerateShortcut(value) {
-		generated, err := ops.GenerateSecret(32)
+		if generator == nil {
+			return "", fmt.Errorf("%s 不支持自动生成", label)
+		}
+		generated, err := generator()
 		if err != nil {
 			return "", err
 		}
@@ -600,15 +603,15 @@ func promptOptionalSecretOverride(reader *bufio.Reader, label, defaultValue stri
 	return value, nil
 }
 
-func promptInteractiveSecretValue(reader *bufio.Reader, label, currentValue, action string, allowGenerate bool) (string, bool, error) {
+func promptInteractiveSecretValue(reader *bufio.Reader, label, currentValue, action string, generator func() (string, error)) (string, bool, error) {
 	switch normalizeInteractiveChoice(action) {
 	case "", "0", "q", "quit", "back":
 		return "", false, nil
 	case "1":
-		if !allowGenerate {
+		if generator == nil {
 			return "", false, fmt.Errorf("当前操作不支持自动生成 %s", label)
 		}
-		generated, err := ops.GenerateSecret(32)
+		generated, err := generator()
 		if err != nil {
 			return "", false, err
 		}
@@ -624,7 +627,10 @@ func promptInteractiveSecretValue(reader *bufio.Reader, label, currentValue, act
 			return "", false, nil
 		}
 		if isGenerateShortcut(value) {
-			generated, err := ops.GenerateSecret(32)
+			if generator == nil {
+				return "", false, fmt.Errorf("当前操作不支持自动生成 %s", label)
+			}
+			generated, err := generator()
 			if err != nil {
 				return "", false, err
 			}

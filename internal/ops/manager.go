@@ -5,7 +5,6 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +16,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+)
+
+const (
+	defaultSecretLength = 32
+	secretCharset       = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
 )
 
 func (m *Manager) CurrentConfig() (DeployConfig, error) {
@@ -489,13 +493,13 @@ func (m *Manager) prepareConfig(generateSecrets bool) (DeployConfig, error) {
 	}
 	if generateSecrets {
 		if strings.TrimSpace(cfg.APIKey) == "" {
-			cfg.APIKey, err = randomSecret(32)
+			cfg.APIKey, err = GenerateAPIKey()
 			if err != nil {
 				return DeployConfig{}, err
 			}
 		}
 		if strings.TrimSpace(cfg.ManagementSecret) == "" {
-			cfg.ManagementSecret, err = randomSecret(32)
+			cfg.ManagementSecret, err = GenerateManagementSecret()
 			if err != nil {
 				return DeployConfig{}, err
 			}
@@ -884,17 +888,37 @@ func removeIfEmpty(path string) error {
 
 func randomSecret(length int) (string, error) {
 	if length <= 0 {
-		length = 32
+		length = defaultSecretLength
 	}
 	buf := make([]byte, length)
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
 	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
+	result := make([]byte, length)
+	for index, value := range buf {
+		result[index] = secretCharset[int(value)%len(secretCharset)]
+	}
+	return string(result), nil
 }
 
 func GenerateSecret(length int) (string, error) {
 	return randomSecret(length)
+}
+
+func GenerateManagementSecret() (string, error) {
+	return generatePrefixedSecret("MGT-", 28)
+}
+
+func GenerateAPIKey() (string, error) {
+	return generatePrefixedSecret("sk-", 32)
+}
+
+func generatePrefixedSecret(prefix string, length int) (string, error) {
+	secret, err := randomSecret(length)
+	if err != nil {
+		return "", err
+	}
+	return prefix + secret, nil
 }
 
 func (m *Manager) withOperationLock(fn func() error) error {

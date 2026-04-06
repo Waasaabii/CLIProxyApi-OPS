@@ -220,6 +220,59 @@ func TestApplyOverridesKeepsDefaultRequestRetryWhenNotExplicit(t *testing.T) {
 	}
 }
 
+func TestPrepareConfigGeneratesReadableSecrets(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	manager, err := NewManager(Options{BaseDir: baseDir, WorkspaceRoot: baseDir})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	cfg, err := manager.prepareConfig(true)
+	if err != nil {
+		t.Fatalf("prepareConfig failed: %v", err)
+	}
+
+	assertReadableSecretFormat(t, cfg.APIKey, "sk-")
+	assertReadableSecretFormat(t, cfg.ManagementSecret, "MGT-")
+	if cfg.ManagementSecretHashed {
+		t.Fatal("默认生成的管理密钥不应标记为已哈希")
+	}
+}
+
+func TestGenerateReadableSecrets(t *testing.T) {
+	t.Parallel()
+
+	apiKey, err := GenerateAPIKey()
+	if err != nil {
+		t.Fatalf("GenerateAPIKey failed: %v", err)
+	}
+	managementSecret, err := GenerateManagementSecret()
+	if err != nil {
+		t.Fatalf("GenerateManagementSecret failed: %v", err)
+	}
+
+	assertReadableSecretFormat(t, apiKey, "sk-")
+	assertReadableSecretFormat(t, managementSecret, "MGT-")
+}
+
+func assertReadableSecretFormat(t *testing.T, value, prefix string) {
+	t.Helper()
+
+	if !strings.HasPrefix(value, prefix) {
+		t.Fatalf("secret = %q, want prefix %q", value, prefix)
+	}
+	if len(value) <= len(prefix) {
+		t.Fatalf("secret = %q, want non-empty suffix", value)
+	}
+	for _, char := range value[len(prefix):] {
+		if !strings.ContainsRune(secretCharset, char) {
+			t.Fatalf("secret = %q, contains invalid char %q", value, string(char))
+		}
+	}
+}
+
 func TestUninstallDryRunKeepsDataAndBackupsByDefault(t *testing.T) {
 	t.Parallel()
 
