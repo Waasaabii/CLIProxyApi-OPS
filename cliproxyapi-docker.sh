@@ -20,6 +20,7 @@ CPA_HOST_PORT=${CPA_HOST_PORT-}
 CPA_CONTAINER_PORT=8317
 CPA_API_KEY=${CPA_API_KEY-}
 CPA_MANAGEMENT_SECRET=${CPA_MANAGEMENT_SECRET-}
+CPA_MANAGEMENT_SECRET_HASHED_ONLY=0
 CPA_ALLOW_REMOTE_MANAGEMENT=${CPA_ALLOW_REMOTE_MANAGEMENT-}
 CPA_DISABLE_CONTROL_PANEL=${CPA_DISABLE_CONTROL_PANEL-}
 CPA_DEBUG=${CPA_DEBUG-}
@@ -272,8 +273,15 @@ sync_runtime_state_from_files() {
     if [ -n "$current_api_key" ]; then
       CPA_API_KEY=$current_api_key
     fi
-    if [ -n "$current_management_secret" ] && ! { [ -f "$CPA_ENV_FILE" ] && is_bcrypt_hash "$current_management_secret"; }; then
-      CPA_MANAGEMENT_SECRET=$current_management_secret
+    if [ -n "$current_management_secret" ]; then
+      if is_bcrypt_hash "$current_management_secret"; then
+        if [ -z "$CPA_MANAGEMENT_SECRET" ]; then
+          CPA_MANAGEMENT_SECRET_HASHED_ONLY=1
+        fi
+      else
+        CPA_MANAGEMENT_SECRET=$current_management_secret
+        CPA_MANAGEMENT_SECRET_HASHED_ONLY=0
+      fi
     fi
     case "$current_allow_remote_management" in
       true|false)
@@ -337,13 +345,14 @@ set_cpa_defaults() {
   CPA_CONTAINER_NAME=${CPA_CONTAINER_NAME:-"cpa"}
   CPA_BIND_HOST=${CPA_BIND_HOST:-"127.0.0.1"}
   CPA_HOST_PORT=${CPA_HOST_PORT:-"8317"}
-  CPA_API_KEY=${CPA_API_KEY:-"sk-$(random_token)"}
-  CPA_MANAGEMENT_SECRET=${CPA_MANAGEMENT_SECRET:-"MGT-$(random_token)"}
+  CPA_API_KEY=${CPA_API_KEY:-"$(generate_api_key)"}
+  CPA_MANAGEMENT_SECRET=${CPA_MANAGEMENT_SECRET:-""}
   CPA_ALLOW_REMOTE_MANAGEMENT=${CPA_ALLOW_REMOTE_MANAGEMENT:-"true"}
   CPA_DISABLE_CONTROL_PANEL=${CPA_DISABLE_CONTROL_PANEL:-"false"}
   CPA_DEBUG=${CPA_DEBUG:-"false"}
   CPA_USAGE_STATISTICS_ENABLED=${CPA_USAGE_STATISTICS_ENABLED:-"false"}
   CPA_REQUEST_RETRY=${CPA_REQUEST_RETRY:-"3"}
+  normalize_management_secret_runtime
 }
 
 update_cpa_paths() {
@@ -426,6 +435,77 @@ random_token() {
   fi
 
   tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32
+}
+
+resolve_cpa_ops_command() {
+  if [ -x "$SCRIPT_DIR/cpa-ops" ]; then
+    printf '%s\n' "$SCRIPT_DIR/cpa-ops"
+    return 0
+  fi
+  if command -v cpa-ops >/dev/null 2>&1; then
+    command -v cpa-ops
+    return 0
+  fi
+  return 1
+}
+
+generate_project_secret() {
+  secret_kind=$1
+  if cpa_ops_command=$(resolve_cpa_ops_command 2>/dev/null); then
+    generated_secret=$("$cpa_ops_command" generate-secret --kind "$secret_kind" 2>/dev/null || true)
+    generated_secret=$(trim_spaces "$generated_secret")
+    if [ -n "$generated_secret" ]; then
+      printf '%s' "$generated_secret"
+      return 0
+    fi
+  fi
+  if command -v go >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/go.mod" ]; then
+    generated_secret=$(cd "$SCRIPT_DIR" && go run ./cmd/cpa-ops generate-secret --kind "$secret_kind" 2>/dev/null || true)
+    generated_secret=$(trim_spaces "$generated_secret")
+    if [ -n "$generated_secret" ]; then
+      printf '%s' "$generated_secret"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+generate_api_key() {
+  if generated_secret=$(generate_project_secret api); then
+    printf '%s' "$generated_secret"
+    return 0
+  fi
+  printf 'sk-%s' "$(random_token)"
+}
+
+generate_management_secret() {
+  if generated_secret=$(generate_project_secret management); then
+    printf '%s' "$generated_secret"
+    return 0
+  fi
+  printf 'MGT-%s' "$(random_token)"
+}
+
+normalize_management_secret_runtime() {
+  CPA_MANAGEMENT_SECRET=$(trim_spaces "$CPA_MANAGEMENT_SECRET")
+  if [ -n "$CPA_MANAGEMENT_SECRET" ] && is_bcrypt_hash "$CPA_MANAGEMENT_SECRET"; then
+    CPA_MANAGEMENT_SECRET=""
+    CPA_MANAGEMENT_SECRET_HASHED_ONLY=1
+    return
+  fi
+  if [ -n "$CPA_MANAGEMENT_SECRET" ]; then
+    CPA_MANAGEMENT_SECRET_HASHED_ONLY=0
+  fi
+}
+
+ensure_plain_management_secret_for_sync() {
+  if [ -n "$CPA_MANAGEMENT_SECRET" ]; then
+    return
+  fi
+  if [ "$CPA_MANAGEMENT_SECRET_HASHED_ONLY" -eq 1 ]; then
+    fail "当前部署仅检测到 bcrypt 哈希，无法回读原始管理密钥。请先执行 'sh $SCRIPT_NAME configure' 重新设置，或在命令前显式传入 CPA_MANAGEMENT_SECRET='新的明文密钥'。"
+  fi
+  fail "未设置 CPA_MANAGEMENT_SECRET，请先执行 'sh $SCRIPT_NAME configure' 或在命令前传入 CPA_MANAGEMENT_SECRET。"
 }
 
 ensure_prereqs() {
@@ -514,7 +594,14 @@ configure_settings() {
   new_bind_host=$(prompt_default "CPA_BIND_HOST 宿主机绑定地址" "$CPA_BIND_HOST")
   new_host_port=$(prompt_default "CPA_HOST_PORT 宿主机端口" "$CPA_HOST_PORT")
   new_api_key=$(prompt_default "CPA_API_KEY 代理访问密钥" "$CPA_API_KEY")
-  new_management_secret=$(prompt_default "CPA_MANAGEMENT_SECRET WebUI 管理密钥" "$CPA_MANAGEMENT_SECRET")
+  if [ "$CPA_MANAGEMENT_SECRET_HASHED_ONLY" -eq 1 ]; then
+    warn "当前仅检测到 bcrypt 哈希，旧的原始管理密钥无法回读，请重新设置新的管理密钥。"
+  fi
+  management_secret_default=$CPA_MANAGEMENT_SECRET
+  if [ -z "$management_secret_default" ]; then
+    management_secret_default=$(generate_management_secret)
+  fi
+  new_management_secret=$(prompt_default "CPA_MANAGEMENT_SECRET WebUI 管理密钥" "$management_secret_default")
   new_allow_remote_management=$(prompt_yes_no "CPA_ALLOW_REMOTE_MANAGEMENT 是否允许远程管理" "$CPA_ALLOW_REMOTE_MANAGEMENT")
   new_disable_control_panel=$(prompt_yes_no "CPA_DISABLE_CONTROL_PANEL 是否禁用内置控制面板" "$CPA_DISABLE_CONTROL_PANEL")
   new_debug=$(prompt_yes_no "CPA_DEBUG 是否开启调试日志" "$CPA_DEBUG")
@@ -537,6 +624,7 @@ configure_settings() {
   CPA_HOST_PORT=$new_host_port
   CPA_API_KEY=$new_api_key
   CPA_MANAGEMENT_SECRET=$new_management_secret
+  CPA_MANAGEMENT_SECRET_HASHED_ONLY=0
   CPA_ALLOW_REMOTE_MANAGEMENT=$new_allow_remote_management
   CPA_DISABLE_CONTROL_PANEL=$new_disable_control_panel
   CPA_DEBUG=$new_debug
@@ -787,6 +875,7 @@ merge_config() {
 }
 
 sync_config() {
+  ensure_plain_management_secret_for_sync
   if [ -f "$CPA_CONFIG_FILE" ]; then
     merge_config
     log "已同步已有 config.yaml，未托管字段保持不变。"
@@ -834,7 +923,9 @@ show_generated_files() {
 
 show_access_info() {
   display_management_secret=$CPA_MANAGEMENT_SECRET
-  if is_bcrypt_hash "$CPA_MANAGEMENT_SECRET"; then
+  if [ "$CPA_MANAGEMENT_SECRET_HASHED_ONLY" -eq 1 ]; then
+    display_management_secret='[当前仅检测到哈希值，请重新设置管理密钥]'
+  elif is_bcrypt_hash "$CPA_MANAGEMENT_SECRET"; then
     display_management_secret='[已哈希保存，原始管理密钥不可回显]'
   fi
 

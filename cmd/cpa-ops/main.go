@@ -53,6 +53,8 @@ func run(args []string) error {
 		return runInfo(ctx, args[1:])
 	case "management-secret":
 		return runManagementSecret(ctx, args[1:])
+	case "generate-secret":
+		return runGenerateSecret(args[1:])
 	case "logs":
 		return runLogs(ctx, args[1:])
 	case "check-update":
@@ -78,8 +80,9 @@ func printUsage() {
   cpa-ops restore         从备份恢复并重启
   cpa-ops uninstall       卸载当前部署
   cpa-ops status          查看容器状态
-  cpa-ops info            查看部署信息
+ cpa-ops info            查看部署信息
   cpa-ops management-secret 查看管理密钥
+  cpa-ops generate-secret 生成新的 API Key 或管理密钥
   cpa-ops logs            查看运维日志
   cpa-ops check-update    检查最新版本
  cpa-ops release-notes   查看最新 release 说明
@@ -252,6 +255,34 @@ func runManagementSecret(ctx context.Context, args []string) error {
 		return err
 	}
 	printManagementSecret(cfg)
+	return nil
+}
+
+func runGenerateSecret(args []string) error {
+	flags := flag.NewFlagSet("generate-secret", flag.ContinueOnError)
+	flags.SetOutput(os.Stdout)
+
+	kind := flags.String("kind", "management", "密钥类型：management 或 api")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+
+	var (
+		value string
+		err   error
+	)
+	switch strings.TrimSpace(*kind) {
+	case "", "management":
+		value, err = ops.GenerateManagementSecret()
+	case "api":
+		value, err = ops.GenerateAPIKey()
+	default:
+		return fmt.Errorf("--kind 参数无效: 仅支持 management 或 api")
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Println(value)
 	return nil
 }
 
