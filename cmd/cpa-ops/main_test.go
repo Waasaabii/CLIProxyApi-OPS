@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+func TestCurrentToolVersionFallsBackToDev(t *testing.T) {
+	t.Parallel()
+
+	originalVersion := toolVersion
+	toolVersion = ""
+	t.Cleanup(func() {
+		toolVersion = originalVersion
+	})
+
+	if got := currentToolVersion(); got != "dev" {
+		t.Fatalf("currentToolVersion = %q, want %q", got, "dev")
+	}
+}
+
 func TestBuildManagerRejectsInvalidBoolFlag(t *testing.T) {
 	t.Parallel()
 

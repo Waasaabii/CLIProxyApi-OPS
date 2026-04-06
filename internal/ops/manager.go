@@ -383,6 +383,29 @@ func (m *Manager) Info(ctx context.Context, authToken string) (Info, error) {
 	}, nil
 }
 
+func (m *Manager) MenuSummary() (MenuSummary, error) {
+	cfg, err := m.loadConfig()
+	if err != nil {
+		return MenuSummary{}, err
+	}
+
+	currentVersion := extractImageTag(cfg.Image)
+	if state, stateErr := m.loadState(); stateErr == nil {
+		if release, ok := fallbackReleaseFromState(state, currentVersion); ok {
+			return MenuSummary{Version: release}, nil
+		}
+		if strings.TrimSpace(state.CurrentVersion) != "" {
+			currentVersion = strings.TrimSpace(state.CurrentVersion)
+		}
+	}
+
+	return MenuSummary{
+		Version: ReleaseInfo{
+			CurrentVersion: currentVersion,
+		},
+	}, nil
+}
+
 func (m *Manager) ReadOperationLog(ctx context.Context, lines int) (string, error) {
 	cfg, err := m.loadConfig()
 	if err != nil {

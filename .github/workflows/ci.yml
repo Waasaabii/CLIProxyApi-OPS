@@ -81,8 +81,14 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
+          VERSION="dev"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+          COMMIT="${GITHUB_SHA}"
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           mkdir -p dist/${{ matrix.artifact_name }}
-          go build -trimpath -ldflags="-s -w" -o dist/${{ matrix.artifact_name }}/${{ matrix.binary_name }} ./cmd/cpa-ops
+          go build -trimpath -ldflags="-s -w -X 'main.toolVersion=${VERSION}' -X 'main.toolCommit=${COMMIT}' -X 'main.toolBuildDate=${BUILD_DATE}'" -o dist/${{ matrix.artifact_name }}/${{ matrix.binary_name }} ./cmd/cpa-ops
 
       - name: 整理发布文件
         run: |

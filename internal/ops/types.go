@@ -123,6 +123,10 @@ type Info struct {
 	LastBackup string       `json:"lastBackup"`
 }
 
+type MenuSummary struct {
+	Version ReleaseInfo `json:"version"`
+}
+
 type RuntimeState struct {
 	Config           DeployConfig `json:"config"`
 	Release          ReleaseInfo  `json:"release,omitempty"`

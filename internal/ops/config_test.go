@@ -172,6 +172,41 @@ func TestManagementSecretStaysPlainInLocalFilesAndHashedInRuntimeConfig(t *testi
 	}
 }
 
+func TestMenuSummaryUsesSavedStateWithoutRemoteLookup(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	manager, err := NewManager(Options{BaseDir: baseDir, WorkspaceRoot: baseDir})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	cfg := defaultDeployConfig(baseDir)
+	cfg.Image = "eceasy/cli-proxy-api:v6.9.3"
+	if err = manager.saveState(cfg, ReleaseInfo{
+		CurrentVersion: "v6.9.3",
+		LatestVersion:  "v6.9.6",
+		HasUpdate:      true,
+		BehindCount:    3,
+	}, ""); err != nil {
+		t.Fatalf("saveState failed: %v", err)
+	}
+
+	summary, err := manager.MenuSummary()
+	if err != nil {
+		t.Fatalf("MenuSummary failed: %v", err)
+	}
+	if summary.Version.CurrentVersion != "v6.9.3" {
+		t.Fatalf("current version = %q, want %q", summary.Version.CurrentVersion, "v6.9.3")
+	}
+	if summary.Version.LatestVersion != "v6.9.6" {
+		t.Fatalf("latest version = %q, want %q", summary.Version.LatestVersion, "v6.9.6")
+	}
+	if !summary.Version.HasUpdate {
+		t.Fatal("expected has update to be true")
+	}
+}
+
 func TestApplyOverridesKeepsDefaultRequestRetryWhenNotExplicit(t *testing.T) {
 	t.Parallel()
 

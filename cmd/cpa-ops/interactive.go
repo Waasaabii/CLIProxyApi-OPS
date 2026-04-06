@@ -166,13 +166,29 @@ func printInteractiveHeader(baseDir, upstreamBaseURL string, manager *ops.Manage
 	fmt.Println("========================================")
 	fmt.Println(" CLIProxyApi-OPS 交互式运维菜单")
 	fmt.Println("========================================")
+	fmt.Printf("cpa-ops 版本: %s\n", currentToolVersion())
 	fmt.Printf("部署目录: %s\n", baseDir)
 	if strings.TrimSpace(upstreamBaseURL) != "" {
 		fmt.Printf("上游地址覆盖: %s\n", strings.TrimSpace(upstreamBaseURL))
 	}
 
-	cfg, err := manager.CurrentConfig()
+	summary, err := manager.MenuSummary()
 	if err == nil {
+		if strings.TrimSpace(summary.Version.CurrentVersion) != "" {
+			fmt.Printf("当前部署版本: %s\n", blankFallback(summary.Version.CurrentVersion))
+		}
+		if strings.TrimSpace(summary.Version.LatestVersion) != "" {
+			fmt.Printf("最新版本: %s\n", blankFallback(summary.Version.LatestVersion))
+			if summary.Version.HasUpdate {
+				fmt.Println("更新状态: 可更新")
+			} else {
+				fmt.Println("更新状态: 已是最新")
+			}
+		}
+	}
+
+	cfg, err := manager.CurrentConfig()
+	if err == nil && strings.TrimSpace(cfg.Image) != "" {
 		fmt.Printf("当前镜像: %s\n", cfg.Image)
 	}
 	status, err := manager.Status(context.Background())
