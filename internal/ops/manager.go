@@ -220,6 +220,9 @@ func (m *Manager) Restore(ctx context.Context, logger Logger, snapshotName strin
 func (m *Manager) Uninstall(ctx context.Context, logger Logger, options UninstallOptions) (UninstallResult, error) {
 	var result UninstallResult
 	result.DryRun = options.DryRun
+	var postUnlockCleanup []string
+	var keepPaths []string
+	baseDirToRemove := ""
 
 	err := m.withOperationLock(func() error {
 		cfg, err := m.loadConfig()
@@ -250,9 +253,11 @@ func (m *Manager) Uninstall(ctx context.Context, logger Logger, options Uninstal
 			cfg.EnvFile,
 			cfg.ConfigFile,
 			cfg.OperationLogFile,
+		}
+		postUnlockCleanup = []string{
 			filepath.Join(cfg.BaseDir, "ops"),
 		}
-		keepPaths := []string{
+		keepPaths = []string{
 			cfg.DataDir,
 			cfg.BackupsDir,
 		}
@@ -283,21 +288,58 @@ func (m *Manager) Uninstall(ctx context.Context, logger Logger, options Uninstal
 				return err
 			}
 		}
+		for _, path := range uniqueCleanPaths(postUnlockCleanup) {
+			if path == "" {
+				continue
+			}
+			if _, statErr := os.Stat(path); statErr != nil {
+				if errors.Is(statErr, os.ErrNotExist) {
+					continue
+				}
+				return statErr
+			}
+			result.Removed = append(result.Removed, path)
+		}
 
+		baseDirToRemove = cfg.BaseDir
+		return nil
+	})
+	if err != nil {
+		return result, err
+	}
+	if !options.DryRun {
+		for _, path := range uniqueCleanPaths(postUnlockCleanup) {
+			if path == "" {
+				continue
+			}
+			if _, statErr := os.Stat(path); statErr != nil {
+				if errors.Is(statErr, os.ErrNotExist) {
+					continue
+				}
+				return result, statErr
+			}
+			if err = removeManagedPath(path); err != nil {
+				return result, err
+			}
+		}
 		for _, path := range uniqueCleanPaths(keepPaths) {
 			if path == "" {
 				continue
 			}
-			if _, statErr := os.Stat(path); statErr == nil {
-				result.Kept = append(result.Kept, path)
-			}
+			_ = removeEmptyTree(path)
 		}
-
-		if !options.DryRun {
-			_ = removeIfEmpty(cfg.BaseDir)
+		if strings.TrimSpace(baseDirToRemove) != "" {
+			_ = removeEmptyTree(baseDirToRemove)
 		}
-		return nil
-	})
+	}
+	for _, path := range uniqueCleanPaths(keepPaths) {
+		if path == "" {
+			continue
+		}
+		if _, statErr := os.Stat(path); statErr == nil {
+			result.Kept = append(result.Kept, path)
+		}
+	}
 	return result, err
 }
 
@@ -884,6 +926,35 @@ func removeIfEmpty(path string) error {
 		return nil
 	}
 	return os.Remove(path)
+}
+
+func removeEmptyTree(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if err = removeEmptyTree(filepath.Join(path, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return removeIfEmpty(path)
 }
 
 func randomSecret(length int) (string, error) {

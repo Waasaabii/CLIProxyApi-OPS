@@ -428,6 +428,90 @@ func TestUninstallRemovesManagedFilesAndKeepsUserFiles(t *testing.T) {
 	}
 }
 
+func TestUninstallRemovesEmptyDataBackupsAndBaseDirByDefault(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	deployExecutor := &recordingDeployExecutor{}
+	manager, err := newManagerWithDependencies(Options{BaseDir: baseDir, WorkspaceRoot: baseDir}, ManagerDependencies{
+		ReleaseProviderFactory: stubReleaseProviderFactory{provider: &stubReleaseProvider{}},
+		DeployExecutorFactory:  stubDeployExecutorFactory{executor: deployExecutor},
+	})
+	if err != nil {
+		t.Fatalf("newManagerWithDependencies failed: %v", err)
+	}
+
+	cfg := defaultDeployConfig(baseDir)
+	cfg.APIKey = "test-api-key"
+	cfg.ManagementSecret = "test-management-secret"
+	if err = seedExistingDeployment(cfg); err != nil {
+		t.Fatalf("seedExistingDeployment failed: %v", err)
+	}
+
+	authKeepFile := filepath.Join(cfg.DataDir, "auths", "keep.txt")
+	if err = os.Remove(authKeepFile); err != nil {
+		t.Fatalf("remove auth keep file failed: %v", err)
+	}
+
+	result, err := manager.Uninstall(t.Context(), nil, UninstallOptions{})
+	if err != nil {
+		t.Fatalf("Uninstall failed: %v", err)
+	}
+
+	if deployExecutor.downCalls.Load() != 1 {
+		t.Fatalf("compose down 调用次数 = %d", deployExecutor.downCalls.Load())
+	}
+	if len(result.Kept) != 0 {
+		t.Fatalf("默认卸载在无用户文件时不应保留目录: %v", result.Kept)
+	}
+	if _, err = os.Stat(cfg.BaseDir); !os.IsNotExist(err) {
+		t.Fatalf("无用户文件时 baseDir 应被删除: err=%v removed=%v", err, result.Removed)
+	}
+}
+
+func TestUninstallWithPurgeRemovesBaseDirCompletely(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	deployExecutor := &recordingDeployExecutor{}
+	manager, err := newManagerWithDependencies(Options{BaseDir: baseDir, WorkspaceRoot: baseDir}, ManagerDependencies{
+		ReleaseProviderFactory: stubReleaseProviderFactory{provider: &stubReleaseProvider{}},
+		DeployExecutorFactory:  stubDeployExecutorFactory{executor: deployExecutor},
+	})
+	if err != nil {
+		t.Fatalf("newManagerWithDependencies failed: %v", err)
+	}
+
+	cfg := defaultDeployConfig(baseDir)
+	cfg.APIKey = "test-api-key"
+	cfg.ManagementSecret = "test-management-secret"
+	if err = seedExistingDeployment(cfg); err != nil {
+		t.Fatalf("seedExistingDeployment failed: %v", err)
+	}
+	backupFile := filepath.Join(cfg.BackupsDir, "backup.tar.gz")
+	if err = os.MkdirAll(filepath.Dir(backupFile), 0o755); err != nil {
+		t.Fatalf("mkdir backup dir failed: %v", err)
+	}
+	if err = os.WriteFile(backupFile, []byte("backup"), 0o644); err != nil {
+		t.Fatalf("write backup failed: %v", err)
+	}
+
+	result, err := manager.Uninstall(t.Context(), nil, UninstallOptions{
+		PurgeData:    true,
+		PurgeBackups: true,
+	})
+	if err != nil {
+		t.Fatalf("Uninstall with purge failed: %v", err)
+	}
+
+	if deployExecutor.downCalls.Load() != 1 {
+		t.Fatalf("compose down 调用次数 = %d", deployExecutor.downCalls.Load())
+	}
+	if _, err = os.Stat(cfg.BaseDir); !os.IsNotExist(err) {
+		t.Fatalf("彻底卸载后 baseDir 应被删除: err=%v removed=%v", err, result.Removed)
+	}
+}
+
 func TestNewManagerRejectsBaseDirOutsideWorkspace(t *testing.T) {
 	t.Parallel()
 
